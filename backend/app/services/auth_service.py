@@ -12,6 +12,11 @@ _supabase: Client = None
 def get_supabase() -> Client:
     global _supabase
     if _supabase is None:
+        if not settings.SUPABASE_URL or not settings.SUPABASE_KEY:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Supabase credentials are not configured in .env"
+            )
         try:
             _supabase = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
         except Exception as e:
