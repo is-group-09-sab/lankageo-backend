@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, status
 from app.services.auth_service import get_current_user
 
 router = APIRouter()
@@ -14,6 +14,15 @@ async def read_users_me(current_user: any = Depends(get_current_user)):
         "email": current_user.email,
         "role": user_metadata.get("role", "public")
     }
+
+@router.post("/logout")
+async def logout(current_user: any = Depends(get_current_user)):
+    """
+    Endpoint to handle any server-side logout logic.
+    For Supabase, the main logout happens client-side, 
+    but this can be used for logging or other cleanup.
+    """
+    return {"message": "Successfully logged out"}
 
 @router.get("/health")
 async def health_check():
