@@ -89,5 +89,55 @@ class GEEService:
             logger.error(f"GEE test connection failed: {e}")
             return {"status": "error", "message": str(e)}
 
+    def get_sentinel1_collection(self, lat: float, lon: float, buffer_meters: float, start_date: str, end_date: str):
+        """
+        Filters the Sentinel-1 ImageCollection based on location and date.
+        
+        Args:
+            lat, lon: Coordinates for the center of the ROI.
+            buffer_meters: Radius to create a geometry.
+            start_date, end_date: Time range for filtering.
+        """
+        if not self._initialized:
+            self.initialize()
+
+        # Create the ROI geometry (GEE uses [longitude, latitude])
+        point = ee.Geometry.Point([lon, lat])
+        roi = point.buffer(buffer_meters).bounds()
+
+        # Filter the S1 Ground Range Detected (GRD) collection
+        collection = (ee.ImageCollection('COPERNICUS/S1_GRD')
+                      .filterBounds(roi)
+                      .filterDate(start_date, end_date)
+                      # Filter for IW mode (Standard for land)
+                      .filter(ee.Filter.eq('instrumentMode', 'IW'))
+                      # Use a flexible filter for polarization (S vs Z spelling)
+                      .filter(ee.Filter.Or(
+                          ee.Filter.listContains('transmitterReceiverPolarization', 'VV'),
+                          ee.Filter.listContains('transmitterReceiverPolarisation', 'VV')
+                      )))
+        
+        return collection, roi
+
+    def get_latest_s1_image(self, lat: float, lon: float, buffer_meters: float, start_date: str, end_date: str):
+        """
+        Retrieves the most recent Sentinel-1 image mosaic for the given parameters.
+        """
+        collection, roi = self.get_sentinel1_collection(lat, lon, buffer_meters, start_date, end_date)
+        
+        # Check if the collection is empty before proceeding
+        count = collection.size().getInfo()
+        if count == 0:
+            return None
+            
+        # Sort by system:time_start (date) in descending order and take the first one
+        latest_image = collection.sort('system:time_start', False).first()
+        
+        if not latest_image:
+            return None
+        
+        # Clip the image to our exact ROI so we don't process unnecessary data
+        return latest_image.clip(roi)
+
 # Singleton instance
 gee_service = GEEService()
