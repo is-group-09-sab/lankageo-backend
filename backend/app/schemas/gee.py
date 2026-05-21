@@ -17,3 +17,12 @@ class Sentinel1Request(BaseModel):
     start_date: str = Field(..., description="Start date in YYYY-MM-DD format")
     end_date: str = Field(..., description="End date in YYYY-MM-DD format")
     orbit_pass: Optional[str] = Field(default="DESCENDING", description="Orbit direction: ASCENDING or DESCENDING")
+
+class Sentinel2Request(BaseModel):
+    """
+    The data required to search for Sentinel-2 optical imagery.
+    """
+    roi: PointROI
+    start_date: str = Field(..., description="Start date in YYYY-MM-DD format")
+    end_date: str = Field(..., description="End date in YYYY-MM-DD format")
+    cloud_percentage: Optional[int] = Field(default=20, description="Maximum allowed cloudy pixel percentage")
