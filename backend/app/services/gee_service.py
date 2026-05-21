@@ -139,5 +139,44 @@ class GEEService:
         # Clip the image to our exact ROI so we don't process unnecessary data
         return latest_image.clip(roi)
 
+    def get_sentinel2_collection(self, lat: float, lon: float, buffer_meters: float, start_date: str, end_date: str, cloud_percentage: int = 20):
+        """
+        Filters the Sentinel-2 (Optical) collection with cloud masking.
+        """
+        if not self._initialized:
+            self.initialize()
+
+        # Create ROI geometry
+        point = ee.Geometry.Point([lon, lat])
+        roi = point.buffer(buffer_meters).bounds()
+
+        # Filter the S2 Harmonized Surface Reflectance collection
+        collection = (ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
+                      .filterBounds(roi)
+                      .filterDate(start_date, end_date)
+                      # Filter by CLOUDY_PIXEL_PERCENTAGE metadata
+                      .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', cloud_percentage)))
+        
+        return collection, roi
+
+    def get_latest_s2_image(self, lat: float, lon: float, buffer_meters: float, start_date: str, end_date: str):
+        """
+        Retrieves the clearest and most recent Sentinel-2 image.
+        """
+        collection, roi = self.get_sentinel2_collection(lat, lon, buffer_meters, start_date, end_date)
+        
+        # Check if empty
+        count = collection.size().getInfo()
+        if count == 0:
+            return None
+
+        # Sort by Cloud Cover (lowest first) then by Date (newest first)
+        best_image = collection.sort('CLOUDY_PIXEL_PERCENTAGE').sort('system:time_start', False).first()
+        
+        if not best_image:
+            return None
+            
+        return best_image.clip(roi)
+
 # Singleton instance
 gee_service = GEEService()
