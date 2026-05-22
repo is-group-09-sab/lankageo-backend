@@ -1,119 +1,182 @@
 import ee
 from app.core.config import settings
-from typing import Dict, Any
-import datetime
-import json
+import logging
+from google.oauth2.credentials import Credentials
+
+logger = logging.getLogger(__name__)
 
 class GEEService:
-    def __init__(self):
-        self.initialized = False
+    """
+    Service for interacting with Google Earth Engine (GEE).
+    Handles authentication and provides high-level data processing methods.
+    """
+    _instance = None
+    _initialized = False
 
-    def _initialize(self):
-        if not self.initialized:
-            if settings.GEE_SERVICE_ACCOUNT and settings.GEE_PRIVATE_KEY:
-                # Assuming private key is a JSON string or a path
-                # For this implementation, we assume it's the JSON key content
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super(GEEService, cls).__new__(cls)
+        return cls._instance
+
+    def initialize(self):
+        """
+        Initializes the GEE SDK with the best available credentials.
+        Order of priority:
+        1. Service Account (Email + Private Key)
+        2. OAuth2 User Refresh Token
+        3. Application Default Credentials (ADC)
+        """
+        if self._initialized:
+            return
+
+        try:
+            # 1. Service Account Authentication
+            if settings.GEE_SERVICE_ACCOUNT and settings.GEE_PRIVATE_KEY and "placeholder" not in settings.GEE_SERVICE_ACCOUNT:
                 try:
+                    logger.info("Initializing GEE with Service Account...")
+                    private_key = settings.GEE_PRIVATE_KEY.replace('\\n', '\n')
                     credentials = ee.ServiceAccountCredentials(
-                        settings.GEE_SERVICE_ACCOUNT, 
-                        settings.GEE_PRIVATE_KEY
+                        settings.GEE_SERVICE_ACCOUNT,
+                        key_data=private_key
                     )
-                    ee.Initialize(credentials)
-                    self.initialized = True
+                    ee.Initialize(credentials, project=settings.GEE_PROJECT)
+                    logger.info("GEE initialized with Service Account.")
+                    self._initialized = True
+                    return
                 except Exception as e:
-                    print(f"Error initializing GEE: {e}")
-            else:
-                # Fallback to default initialization if possible
+                    logger.warning(f"Service Account auth failed: {e}")
+
+            # 2. OAuth2 Refresh Token Authentication
+            if settings.GEE_REFRESH_TOKEN and settings.GEE_CLIENT_ID:
                 try:
-                    ee.Initialize()
-                    self.initialized = True
-                except:
-                    print("GEE credentials not configured.")
+                    logger.info("Initializing GEE with OAuth2 Refresh Token...")
+                    credentials = Credentials(
+                        token=None,
+                        refresh_token=settings.GEE_REFRESH_TOKEN,
+                        client_id=settings.GEE_CLIENT_ID,
+                        client_secret=settings.GEE_CLIENT_SECRET,
+                        token_uri="https://oauth2.googleapis.com/token"
+                    )
+                    ee.Initialize(credentials, project=settings.GEE_PROJECT)
+                    logger.info("GEE initialized with User Refresh Token.")
+                    self._initialized = True
+                    return
+                except Exception as e:
+                    logger.warning(f"Refresh Token auth failed: {e}")
 
-    def run_live_analysis(self, lat: float, lng: float, radius_km: int) -> Dict[str, Any]:
-        self._initialize()
-        
-        # 1. Define ROI
-        point = ee.Geometry.Point([lng, lat])
-        roi = point.buffer(radius_km * 1000)
-        
-        # 2. Check Cloud Cover (Sentinel-2)
-        s2_col = (ee.ImageCollection("COPERNICUS/S2_HARMONIZED")
-                  .filterBounds(roi)
-                  .filterDate(
-                      datetime.datetime.now() - datetime.timedelta(days=5),
-                      datetime.datetime.now()
-                  )
-                  .sort('CLOUDY_PIXEL_PERCENTAGE'))
-        
-        latest_s2 = s2_col.first()
-        
-        # Compute cloud cover over ROI
-        # Using QA60 band for cloud check as per spec
-        cloud_pct = 100 # Default if no image
-        source = "Sentinel-2 Optical"
-        
-        if latest_s2:
-            # Simplification: Use the image metadata if it covers the ROI
-            # In a real scenario, we'd clip and compute the percentage of QA60 cloud pixels
-            cloud_pct = latest_s2.get('CLOUDY_PIXEL_PERCENTAGE').getInfo()
-        
-        # 3. Satellite Source Selection Logic
-        if cloud_pct > 20:
-            source = "Sentinel-1 SAR"
-            # SAR Processing (Simplified)
-            # In reality, this would involve Sentinel-1 GRD collection, filtering, 
-            # and flood detection algorithms like thresholding
-            analysis_img = ee.Image(0) # Placeholder for SAR result
-        else:
-            source = "Sentinel-2 Optical"
-            # Optical Processing (Simplified)
-            # Using MNDWI or similar for water detection
-            analysis_img = ee.Image(0) # Placeholder for Optical result
+            # 3. Fallback to Application Default Credentials (ADC)
+            logger.info("Initializing GEE with Application Default Credentials (ADC)...")
+            ee.Initialize(project=settings.GEE_PROJECT)
+            logger.info("GEE initialized with ADC.")
+            self._initialized = True
 
-        # 4. Impact Layer Lookups (Placeholders)
-        # In a real implementation, these would be intersections with:
-        # - WorldPop (Population)
-        # - OSM (Roads/Buildings)
-        # - ESA WorldCover (Cropland)
+        except Exception as e:
+            logger.error(f"Failed to initialize GEE: {e}")
+            raise RuntimeError(f"GEE Initialization failed: {e}")
+
+    def test_connection(self):
+        """
+        Verifies the GEE connection by querying the SRTM elevation dataset.
+        """
+        if not self._initialized:
+            self.initialize()
         
-        impact_metrics = {
-            "affected_area_km2": 12.5,  # Mock
-            "estimated_population": 450, # Mock
-            "buildings_exposed": 85,     # Mock
-            "road_length_km": 3.2,       # Mock
-            "cropland_area_km2": 5.4,    # Mock
-            "confidence_score": 0.85,    # Mock
-            "risk_level": "Moderate",    # Mock
-            "gee_asset_id": f"projects/lankageo/assets/flood_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
-        }
+        try:
+            image = ee.Image("USGS/SRTMGL1_003")
+            info = image.getInfo()
+            return {"status": "success", "asset_id": info.get("id")}
+        except Exception as e:
+            logger.error(f"GEE test connection failed: {e}")
+            return {"status": "error", "message": str(e)}
 
-        # 5. Generate Tile URL and GeoJSON
-        # Dummy tile URL for example
-        map_id = analysis_img.getMapId({'palette': ['white', 'blue'], 'min': 0, 'max': 1})
-        tile_url = map_id['tile_fetcher'].url_format
+    def get_sentinel1_collection(self, lat: float, lon: float, buffer_meters: float, start_date: str, end_date: str):
+        """
+        Filters the Sentinel-1 ImageCollection based on location and date.
+        
+        Args:
+            lat, lon: Coordinates for the center of the ROI.
+            buffer_meters: Radius to create a geometry.
+            start_date, end_date: Time range for filtering.
+        """
+        if not self._initialized:
+            self.initialize()
 
-        # Dummy GeoJSON (Simplified)
-        geojson = {
-            "type": "FeatureCollection",
-            "features": [
-                {
-                    "type": "Feature",
-                    "geometry": {
-                        "type": "Polygon",
-                        "coordinates": [[[lng, lat], [lng+0.01, lat], [lng+0.01, lat+0.01], [lng, lat]]]
-                    },
-                    "properties": {"severity": "Moderate"}
-                }
-            ]
-        }
+        # Create the ROI geometry (GEE uses [longitude, latitude])
+        point = ee.Geometry.Point([lon, lat])
+        roi = point.buffer(buffer_meters).bounds()
 
-        return {
-            "tile_url": tile_url,
-            "geojson": geojson,
-            "satellite_source": source,
-            "cloud_cover_pct": cloud_pct,
-            **impact_metrics
-        }
+        # Filter the S1 Ground Range Detected (GRD) collection
+        collection = (ee.ImageCollection('COPERNICUS/S1_GRD')
+                      .filterBounds(roi)
+                      .filterDate(start_date, end_date)
+                      # Filter for IW mode (Standard for land)
+                      .filter(ee.Filter.eq('instrumentMode', 'IW'))
+                      # Use a flexible filter for polarization (S vs Z spelling)
+                      .filter(ee.Filter.Or(
+                          ee.Filter.listContains('transmitterReceiverPolarization', 'VV'),
+                          ee.Filter.listContains('transmitterReceiverPolarisation', 'VV')
+                      )))
+        
+        return collection, roi
 
+    def get_latest_s1_image(self, lat: float, lon: float, buffer_meters: float, start_date: str, end_date: str):
+        """
+        Retrieves the most recent Sentinel-1 image mosaic for the given parameters.
+        """
+        collection, roi = self.get_sentinel1_collection(lat, lon, buffer_meters, start_date, end_date)
+        
+        # Check if the collection is empty before proceeding
+        count = collection.size().getInfo()
+        if count == 0:
+            return None
+            
+        # Sort by system:time_start (date) in descending order and take the first one
+        latest_image = collection.sort('system:time_start', False).first()
+        
+        if not latest_image:
+            return None
+        
+        # Clip the image to our exact ROI so we don't process unnecessary data
+        return latest_image.clip(roi)
+
+    def get_sentinel2_collection(self, lat: float, lon: float, buffer_meters: float, start_date: str, end_date: str, cloud_percentage: int = 20):
+        """
+        Filters the Sentinel-2 (Optical) collection with cloud masking.
+        """
+        if not self._initialized:
+            self.initialize()
+
+        # Create ROI geometry
+        point = ee.Geometry.Point([lon, lat])
+        roi = point.buffer(buffer_meters).bounds()
+
+        # Filter the S2 Harmonized Surface Reflectance collection
+        collection = (ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
+                      .filterBounds(roi)
+                      .filterDate(start_date, end_date)
+                      # Filter by CLOUDY_PIXEL_PERCENTAGE metadata
+                      .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', cloud_percentage)))
+        
+        return collection, roi
+
+    def get_latest_s2_image(self, lat: float, lon: float, buffer_meters: float, start_date: str, end_date: str):
+        """
+        Retrieves the clearest and most recent Sentinel-2 image.
+        """
+        collection, roi = self.get_sentinel2_collection(lat, lon, buffer_meters, start_date, end_date)
+        
+        # Check if empty
+        count = collection.size().getInfo()
+        if count == 0:
+            return None
+
+        # Sort by Cloud Cover (lowest first) then by Date (newest first)
+        best_image = collection.sort('CLOUDY_PIXEL_PERCENTAGE').sort('system:time_start', False).first()
+        
+        if not best_image:
+            return None
+            
+        return best_image.clip(roi)
+
+# Singleton instance
 gee_service = GEEService()
