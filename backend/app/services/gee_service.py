@@ -69,7 +69,10 @@ class GEEService:
 
             # 3. Fallback to Application Default Credentials (ADC)
             logger.info("Initializing GEE with Application Default Credentials (ADC)...")
-            ee.Initialize(project=settings.GEE_PROJECT)
+            if settings.GEE_PROJECT:
+                ee.Initialize(project=settings.GEE_PROJECT)
+            else:
+                ee.Initialize()
             logger.info("GEE initialized with ADC.")
             self._initialized = True
 
