@@ -17,6 +17,7 @@ class Sentinel1Request(BaseModel):
     start_date: str = Field(..., description="Start date in YYYY-MM-DD format")
     end_date: str = Field(..., description="End date in YYYY-MM-DD format")
     orbit_pass: Optional[str] = Field(default="DESCENDING", description="Orbit direction: ASCENDING or DESCENDING")
+    preprocess: bool = Field(default=False, description="Whether to apply speckle filtering and dB conversion")
 
 class Sentinel2Request(BaseModel):
     """
