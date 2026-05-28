@@ -142,6 +142,28 @@ class GEEService:
         # Clip the image to our exact ROI so we don't process unnecessary data
         return latest_image.clip(roi)
 
+    def preprocess_sentinel1(self, image):
+        """
+        Applies speckle filtering and converts SAR backscatter to dB.
+        
+        Steps:
+        1. Focal Mean (7x7) to smooth radar noise (speckle).
+        2. Logarithmic conversion to Decibels (dB) for better contrast.
+        """
+        # 1. Select the VV band (vertical-vertical polarization)
+        vv = image.select('VV')
+
+        # 2. Apply Speckle Filter (Focal Mean 7x7)
+        # We use a circle kernel to smooth out the grainy 'salt and pepper' noise
+        smoothed = vv.focal_mean(7, 'circle', 'pixels')
+
+        # 3. Convert to dB: 10 * log10(Linear_Backscatter)
+        # This makes water appear very dark (low values) and land bright
+        vv_db = smoothed.log10().multiply(10).rename('VV_db')
+
+        # Add the new band back to the original image so it carries all metadata
+        return image.addBands(vv_db)
+
     def get_sentinel2_collection(self, lat: float, lon: float, buffer_meters: float, start_date: str, end_date: str, cloud_percentage: int = 20):
         """
         Filters the Sentinel-2 (Optical) collection with cloud masking.
