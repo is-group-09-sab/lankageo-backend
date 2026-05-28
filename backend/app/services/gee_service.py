@@ -1,7 +1,10 @@
 import ee
-from app.core.config import settings
 import logging
+import random
+from typing import Dict, Any, List
 from google.oauth2.credentials import Credentials
+from app.core.config import settings
+from app.schemas.analyze import TrendAnalysisResponse, YearData, ZoneSeverityCount
 
 logger = logging.getLogger(__name__)
 
@@ -177,6 +180,43 @@ class GEEService:
             return None
             
         return best_image.clip(roi)
+
+    async def run_historical_analysis(
+        self, lat: float, lng: float, radius_km: float, years: int
+    ) -> TrendAnalysisResponse:
+        """
+        Performs historical risk analysis using Google Earth Engine.
+        This is currently a stub returning mock data for SCRUM-49.
+        """
+        logger.info(f"Running historical analysis for {lat}, {lng} with radius {radius_km}km for {years} years")
+        
+        # Mock data generation
+        current_year = 2024
+        years_list = list(range(current_year - years, current_year))
+        
+        years_data = [
+            YearData(year=y, value=random.uniform(10.0, 80.0))
+            for y in years_list
+        ]
+        
+        # Determine peak and min years from mock data
+        peak_year_data = max(years_data, key=lambda x: x.value)
+        min_year_data = min(years_data, key=lambda x: x.value)
+        avg_ffi = sum(d.value for d in years_data) / len(years_data)
+        
+        return TrendAnalysisResponse(
+            years_data=years_data,
+            composite_tile_url="https://earthengine.googleapis.com/v1/projects/lankageo/maps/mock-composite/tiles/{z}/{x}/{y}",
+            avg_ffi=round(avg_ffi, 2),
+            peak_year=peak_year_data.year,
+            min_year=min_year_data.year,
+            trend_heatmap_url="https://earthengine.googleapis.com/v1/projects/lankageo/maps/mock-heatmap/tiles/{z}/{x}/{y}",
+            zone_count_by_severity=[
+                ZoneSeverityCount(severity="High", count=random.randint(5, 15)),
+                ZoneSeverityCount(severity="Medium", count=random.randint(15, 30)),
+                ZoneSeverityCount(severity="Low", count=random.randint(30, 50)),
+            ]
+        )
 
 # Singleton instance
 gee_service = GEEService()
