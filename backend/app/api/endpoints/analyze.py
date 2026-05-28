@@ -56,15 +56,20 @@ async def analyze_trend(
     
     try:
         # 1. Execute Historical Analysis via GEE Service
-        analysis_result = await gee_service.run_historical_analysis(
-            lat=request_data.lat,
-            lng=request_data.lng,
-            radius_km=request_data.radius_km,
-            years=request_data.years
+        # Enforcing 15-second NFR via asyncio.wait_for to ensure the endpoint 
+        # returns within the required time limit for the frontend.
+        analysis_result = await asyncio.wait_for(
+            gee_service.run_historical_analysis(
+                lat=request_data.lat,
+                lng=request_data.lng,
+                radius_km=request_data.radius_km,
+                years=request_data.years
+            ),
+            timeout=15.0
         )
         
         # 2. Persist to Database (Supabase)
-        # Create parent Request record
+        # Create parent Request record to track the operation
         request_record = {
             "lat": request_data.lat,
             "lng": request_data.lng,
@@ -84,7 +89,7 @@ async def analyze_trend(
             
         request_id = request_response.data[0]["id"]
         
-        # Create child Historical_Risk_Profile record
+        # Create child Historical_Risk_Profile record linked to the parent Request
         profile_record = {
             "request_id": request_id,
             "avg_ffi": analysis_result.avg_ffi,
@@ -97,22 +102,19 @@ async def analyze_trend(
         
         if not profile_response.data:
             logger.error(f"Failed to persist risk profile for request {request_id}")
-            # We don't necessarily want to fail the whole request if only the profile persistence fails,
-            # but for this task, we'll treat it as a failure.
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to persist risk profile in database"
             )
             
-        # 3. Performance Benchmarking
-        duration = time.time() - start_time
-        logger.info(f"Trend analysis completed in {duration:.2f} seconds")
-        
-        if duration > 15.0:
-            logger.warning(f"Trend analysis exceeded 15s target: {duration:.2f}s")
-            
         return analysis_result
 
+    except asyncio.TimeoutError:
+        logger.error(f"Trend analysis timed out after 15s for {request_data.lat}, {request_data.lng}")
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="Historical trend analysis timed out. Please try with a smaller radius or fewer years."
+        )
     except Exception as e:
         logger.error(f"Error during trend analysis: {str(e)}")
         if isinstance(e, HTTPException):
