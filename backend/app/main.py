@@ -12,7 +12,11 @@ app = FastAPI(
 
 @app.on_event("startup")
 async def startup_event():
-    gee_service.initialize()
+    try:
+        gee_service.initialize()
+    except Exception as e:
+        print(f"Warning: GEE initialization failed: {e}")
+        print("The application will continue to run, but GEE features may not work.")
 
 # Set all CORS enabled origins
 # In production, you should restrict this to your frontend URL
