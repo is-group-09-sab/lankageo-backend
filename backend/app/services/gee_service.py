@@ -1,7 +1,9 @@
 import ee
 import logging
+import os
 import random
 from typing import Dict, Any, List
+from google.oauth2 import service_account
 from google.oauth2.credentials import Credentials
 from app.core.config import settings
 from app.schemas.analyze import TrendAnalysisResponse, YearData, ZoneSeverityCount
@@ -25,31 +27,67 @@ class GEEService:
         """
         Initializes the GEE SDK with the best available credentials.
         Order of priority:
-        1. Service Account (Email + Private Key)
-        2. OAuth2 User Refresh Token
-        3. Application Default Credentials (ADC)
+        1. Service Account File
+        2. Service Account (Email + Private Key) from Env
+        3. OAuth2 User Refresh Token
+        4. Application Default Credentials (ADC)
         """
         if self._initialized:
             return
 
-        try:
-            # 1. Service Account Authentication
-            if settings.GEE_SERVICE_ACCOUNT and settings.GEE_PRIVATE_KEY and "placeholder" not in settings.GEE_SERVICE_ACCOUNT:
-                try:
-                    logger.info("Initializing GEE with Service Account...")
-                    private_key = settings.GEE_PRIVATE_KEY.replace('\\n', '\n')
-                    credentials = ee.ServiceAccountCredentials(
-                        settings.GEE_SERVICE_ACCOUNT,
-                        key_data=private_key
-                    )
-                    ee.Initialize(credentials, project=settings.GEE_PROJECT)
-                    logger.info("GEE initialized with Service Account.")
-                    self._initialized = True
-                    return
-                except Exception as e:
-                    logger.warning(f"Service Account auth failed: {e}")
+        logger.info("Attempting to initialize Google Earth Engine...")
 
-            # 2. OAuth2 Refresh Token Authentication
+        try:
+            # 1. Service Account Authentication from File
+            if settings.GEE_SERVICE_ACCOUNT_FILE:
+                try:
+                    if os.path.exists(settings.GEE_SERVICE_ACCOUNT_FILE):
+                        logger.info(f"Initializing GEE with Service Account file: {settings.GEE_SERVICE_ACCOUNT_FILE}")
+                        credentials = service_account.Credentials.from_service_account_file(
+                            settings.GEE_SERVICE_ACCOUNT_FILE
+                        )
+                        ee.Initialize(credentials, project=settings.GEE_PROJECT)
+                        logger.info("GEE initialized with Service Account file.")
+                        self._initialized = True
+                        return
+                    else:
+                        logger.warning(f"GEE_SERVICE_ACCOUNT_FILE specified but not found: {settings.GEE_SERVICE_ACCOUNT_FILE}")
+                except Exception as e:
+                    logger.warning(f"Service Account file auth failed: {e}")
+
+            # 2. Service Account Authentication from Environment Variables
+            if settings.GEE_SERVICE_ACCOUNT and settings.GEE_PRIVATE_KEY:
+                # Check for placeholders
+                is_placeholder = (
+                    "your-gee-service-account" in settings.GEE_SERVICE_ACCOUNT or 
+                    "your-project-id" in settings.GEE_SERVICE_ACCOUNT or
+                    "..." in settings.GEE_PRIVATE_KEY or
+                    "BEGIN PRIVATE KEY" not in settings.GEE_PRIVATE_KEY
+                )
+                
+                if is_placeholder:
+                    logger.warning("GEE Service Account credentials appear to be placeholders. Skipping...")
+                else:
+                    try:
+                        logger.info("Initializing GEE with Service Account from environment...")
+                        private_key = settings.GEE_PRIVATE_KEY.replace('\\n', '\n')
+                        
+                        # Construct credentials info dict for google-auth
+                        info = {
+                            "client_email": settings.GEE_SERVICE_ACCOUNT,
+                            "private_key": private_key,
+                            "token_uri": "https://oauth2.googleapis.com/token",
+                            "type": "service_account",
+                        }
+                        credentials = service_account.Credentials.from_service_account_info(info)
+                        ee.Initialize(credentials, project=settings.GEE_PROJECT)
+                        logger.info("GEE initialized with Service Account from environment.")
+                        self._initialized = True
+                        return
+                    except Exception as e:
+                        logger.warning(f"Service Account environment auth failed: {e}")
+
+            # 3. OAuth2 Refresh Token Authentication
             if settings.GEE_REFRESH_TOKEN and settings.GEE_CLIENT_ID:
                 try:
                     logger.info("Initializing GEE with OAuth2 Refresh Token...")
@@ -67,24 +105,40 @@ class GEEService:
                 except Exception as e:
                     logger.warning(f"Refresh Token auth failed: {e}")
 
-            # 3. Fallback to Application Default Credentials (ADC)
-            logger.info("Initializing GEE with Application Default Credentials (ADC)...")
-            ee.Initialize(project=settings.GEE_PROJECT)
-            logger.info("GEE initialized with ADC.")
-            self._initialized = True
+            # 4. Fallback to Application Default Credentials (ADC)
+            try:
+                logger.info("Initializing GEE with Application Default Credentials (ADC)...")
+                ee.Initialize(project=settings.GEE_PROJECT)
+                logger.info("GEE initialized with ADC.")
+                self._initialized = True
+                return
+            except Exception as e:
+                logger.warning(f"ADC initialization failed: {e}")
+
+            # If all methods failed
+            logger.error("All GEE initialization methods failed. GEE features will not be available.")
+            # We don't raise RuntimeError here to allow the rest of the app to start.
+            # GEE-dependent methods will fail later when they check self._initialized.
 
         except Exception as e:
-            logger.error(f"Failed to initialize GEE: {e}")
-            raise RuntimeError(f"GEE Initialization failed: {e}")
+            logger.error(f"Unexpected error during GEE initialization: {e}")
+
+    def _ensure_initialized(self):
+        """
+        Ensures GEE is initialized before performing operations.
+        Raises RuntimeError if initialization fails.
+        """
+        if not self._initialized:
+            self.initialize()
+            if not self._initialized:
+                raise RuntimeError("GEE is not initialized. Please check your credentials.")
 
     def test_connection(self):
         """
         Verifies the GEE connection by querying the SRTM elevation dataset.
         """
-        if not self._initialized:
-            self.initialize()
-        
         try:
+            self._ensure_initialized()
             image = ee.Image("USGS/SRTMGL1_003")
             info = image.getInfo()
             return {"status": "success", "asset_id": info.get("id")}
@@ -95,14 +149,10 @@ class GEEService:
     def get_sentinel1_collection(self, lat: float, lon: float, buffer_meters: float, start_date: str, end_date: str):
         """
         Filters the Sentinel-1 ImageCollection based on location and date.
-        
-        Args:
-            lat, lon: Coordinates for the center of the ROI.
-            buffer_meters: Radius to create a geometry.
-            start_date, end_date: Time range for filtering.
         """
-        if not self._initialized:
-            self.initialize()
+        self._ensure_initialized()
+        
+        # ... rest of the method unchanged ...
 
         # Create the ROI geometry (GEE uses [longitude, latitude])
         point = ee.Geometry.Point([lon, lat])
@@ -168,8 +218,7 @@ class GEEService:
         """
         Filters the Sentinel-2 (Optical) collection with cloud masking.
         """
-        if not self._initialized:
-            self.initialize()
+        self._ensure_initialized()
 
         # Create ROI geometry
         point = ee.Geometry.Point([lon, lat])
