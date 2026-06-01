@@ -18,6 +18,8 @@ class Sentinel1Request(BaseModel):
     end_date: str = Field(..., description="End date in YYYY-MM-DD format")
     orbit_pass: Optional[str] = Field(default="DESCENDING", description="Orbit direction: ASCENDING or DESCENDING")
     preprocess: bool = Field(default=False, description="Whether to apply speckle filtering and dB conversion")
+    compare_with_baseline: bool = Field(default=False, description="Whether to perform change detection against a baseline image")
+    baseline_days: int = Field(default=30, description="How many days back to look for a baseline image")
 
 class Sentinel2Request(BaseModel):
     """

@@ -21,16 +21,17 @@ async def get_gee_status():
 @router.post("/sentinel1")
 async def get_sentinel1_metadata(request: Sentinel1Request):
     """
-    Finds the latest Sentinel-1 radar image and optionally applies preprocessing.
+    Finds the latest Sentinel-1 radar image and optionally applies preprocessing or change detection.
     """
     try:
-        # 1. Search for the image
+        # 1. Search for the primary (post-event) image
         image = gee_service.get_latest_s1_image(
             request.roi.lat,
             request.roi.lon,
             request.roi.buffer_meters,
             request.start_date,
-            request.end_date
+            request.end_date,
+            request.orbit_pass
         )
         
         if not image:
@@ -44,10 +45,11 @@ async def get_sentinel1_metadata(request: Sentinel1Request):
             "image_id": image.get('system:index').getInfo(),
             "date": image.get('system:time_start').getInfo(),
             "orbit": image.get('orbitProperties_pass').getInfo(),
+            "relative_orbit": image.get('relativeOrbitNumber_start').getInfo(),
         }
 
         # 2. Apply Preprocessing if requested (LG-104)
-        if request.preprocess:
+        if request.preprocess and not request.compare_with_baseline:
             processed_image = gee_service.preprocess_sentinel1(image)
             
             # Get the mean dB value for the ROI to verify processing
@@ -60,6 +62,35 @@ async def get_sentinel1_metadata(request: Sentinel1Request):
             
             response["vv_db_mean"] = stats.get('VV_db')
             response["processed"] = True
+
+        # 3. Apply Change Detection if requested (LG-105)
+        if request.compare_with_baseline:
+            baseline_image = gee_service.get_baseline_s1_image(
+                image, 
+                days_back=request.baseline_days
+            )
+            
+            if not baseline_image:
+                response["baseline_status"] = "not_found"
+                response["message"] = "Post-image found, but no matching baseline image exists for this orbit."
+            else:
+                # Run the ratio calculation
+                change_image = gee_service.compute_change_ratio(baseline_image, image)
+                
+                # Calculate statistics
+                stats = change_image.reduceRegion(
+                    reducer=ee.Reducer.mean(),
+                    geometry=image.geometry(),
+                    scale=30,
+                    maxPixels=1e9
+                ).getInfo()
+                
+                response["baseline_image_id"] = baseline_image.get('system:index').getInfo()
+                response["baseline_date"] = baseline_image.get('system:time_start').getInfo()
+                response["change_ratio_mean"] = stats.get('change_ratio')
+                response["flood_detected"] = stats.get('flood_mask') > 0.05 # Simple heuristic: if >5% of area is flooded
+                response["processed"] = True
+                response["method"] = "change_detection_ratio"
 
         return response
     except Exception as e:

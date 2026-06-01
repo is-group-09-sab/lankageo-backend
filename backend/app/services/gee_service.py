@@ -119,12 +119,16 @@ class GEEService:
         
         return collection, roi
 
-    def get_latest_s1_image(self, lat: float, lon: float, buffer_meters: float, start_date: str, end_date: str):
+    def get_latest_s1_image(self, lat: float, lon: float, buffer_meters: float, start_date: str, end_date: str, orbit_pass: str = "DESCENDING"):
         """
         Retrieves the most recent Sentinel-1 image mosaic for the given parameters.
         """
         collection, roi = self.get_sentinel1_collection(lat, lon, buffer_meters, start_date, end_date)
         
+        # Apply orbit pass filter if specified
+        if orbit_pass:
+            collection = collection.filter(ee.Filter.eq('orbitProperties_pass', orbit_pass))
+
         # Check if the collection is empty before proceeding
         count = collection.size().getInfo()
         if count == 0:
@@ -138,6 +142,72 @@ class GEEService:
         
         # Clip the image to our exact ROI so we don't process unnecessary data
         return latest_image.clip(roi)
+
+    def get_baseline_s1_image(self, post_image, days_back: int = 30):
+        """
+        Finds a baseline Sentinel-1 image from the same relative orbit as the post-event image.
+        
+        Args:
+            post_image: The ee.Image representing the post-event state.
+            days_back: Number of days prior to look for a baseline.
+        """
+        # 1. Extract orbital metadata from the post-event image
+        # This is critical for matching the geometry (incidence angle)
+        relative_orbit = post_image.get('relativeOrbitNumber_start')
+        orbit_pass = post_image.get('orbitProperties_pass')
+        post_date = ee.Date(post_image.get('system:time_start'))
+        roi = post_image.geometry()
+
+        # 2. Define the baseline search window
+        # We look for images ~30 days prior to the post-event image
+        pre_date_start = post_date.advance(-days_back - 15, 'day')
+        pre_date_end = post_date.advance(-days_back + 15, 'day')
+
+        # 3. Filter the collection for the same orbital parameters
+        baseline_collection = (ee.ImageCollection('COPERNICUS/S1_GRD')
+                               .filterBounds(roi)
+                               .filterDate(pre_date_start, pre_date_end)
+                               .filter(ee.Filter.eq('relativeOrbitNumber_start', relative_orbit))
+                               .filter(ee.Filter.eq('orbitProperties_pass', orbit_pass))
+                               .filter(ee.Filter.eq('instrumentMode', 'IW')))
+
+        # Check if we found anything
+        count = baseline_collection.size().getInfo()
+        if count == 0:
+            return None
+
+        # Sort by proximity to the target days_back (closest to post_date - days_back)
+        target_date = post_date.advance(-days_back, 'day')
+        
+        def add_date_diff(img):
+            diff = ee.Number(img.get('system:time_start')).subtract(target_date.millis()).abs()
+            return img.set('date_diff', diff)
+
+        baseline_image = baseline_collection.map(add_date_diff).sort('date_diff').first()
+
+        return baseline_image.clip(roi)
+
+    def compute_change_ratio(self, pre_image, post_image, threshold: float = 1.25):
+        """
+        Computes the change ratio between pre and post images for flood detection.
+        
+        Formula: Pre_event / Post_event
+        Logic: Water decreases backscatter, so Pre/Post > 1 indicates new water.
+        """
+        # 1. Pre-process both images (Speckle filtering is essential)
+        # We work with the raw VV band here (linear scale) for the ratio
+        pre_vv = pre_image.select('VV').focal_mean(7, 'circle', 'pixels')
+        post_vv = post_image.select('VV').focal_mean(7, 'circle', 'pixels')
+
+        # 2. Compute Ratio (Pre / Post)
+        # We use linear backscatter, not dB, for the ratio calculation
+        ratio = pre_vv.divide(post_vv).rename('change_ratio')
+
+        # 3. Apply Threshold (UN-SPIDER recommendation: 1.25)
+        flood_mask = ratio.gt(threshold).rename('flood_mask')
+
+        # Return the multi-band image containing the ratio and the binary mask
+        return ee.Image.cat([ratio, flood_mask])
 
     def preprocess_sentinel1(self, image):
         """
