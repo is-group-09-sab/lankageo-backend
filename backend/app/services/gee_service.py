@@ -187,7 +187,7 @@ class GEEService:
 
         return baseline_image.clip(roi)
 
-    def compute_change_ratio(self, pre_image, post_image, threshold: float = 1.25):
+    def compute_change_ratio(self, pre_image, post_image, threshold: float = 1.25, use_otsu: bool = False):
         """
         Computes the change ratio between pre and post images for flood detection.
         
@@ -203,11 +203,68 @@ class GEEService:
         # We use linear backscatter, not dB, for the ratio calculation
         ratio = pre_vv.divide(post_vv).rename('change_ratio')
 
-        # 3. Apply Threshold (UN-SPIDER recommendation: 1.25)
-        flood_mask = ratio.gt(threshold).rename('flood_mask')
+        # 3. Dynamic Thresholding (Otsu) if requested
+        final_threshold = threshold
+        if use_otsu:
+            try:
+                # Calculate histogram of the ratio image
+                # We use a 0.05 bucket width to capture the split between land and water
+                hist = ratio.reduceRegion(
+                    reducer=ee.Reducer.histogram(255, 0.05),
+                    geometry=post_image.geometry(),
+                    scale=30,
+                    maxPixels=1e9
+                ).get('change_ratio').getInfo()
+                
+                if hist:
+                    final_threshold = self._calculate_otsu_threshold(hist)
+                    logger.info(f"Calculated dynamic Otsu threshold: {final_threshold}")
+            except Exception as e:
+                logger.warning(f"Otsu calculation failed, falling back to static threshold: {e}")
+
+        # 4. Apply Threshold
+        flood_mask = ratio.gt(final_threshold).rename('flood_mask')
 
         # Return the multi-band image containing the ratio and the binary mask
-        return ee.Image.cat([ratio, flood_mask])
+        # We also store the threshold used in the image properties for traceability
+        return ee.Image.cat([ratio, flood_mask]).set('applied_threshold', final_threshold)
+
+    def _calculate_otsu_threshold(self, hist_data):
+        """
+        Implementation of the Otsu algorithm to find the optimal threshold 
+        by maximizing between-class variance.
+        """
+        import numpy as np
+        
+        counts = np.array(hist_data['histogram'])
+        means = np.array(hist_data['bucketMeans'])
+        
+        # Total number of pixels
+        total = counts.sum()
+        if total == 0:
+            return 1.25 # Fallback
+            
+        # Probability of each bucket
+        probs = counts / total
+        
+        # Cumulative sums
+        weight1 = np.cumsum(probs)
+        weight2 = 1.0 - weight1
+        
+        # Cumulative means
+        mean1 = np.cumsum(means * probs) / weight1
+        mean2 = (mean1[-1] * weight1[-1] - np.cumsum(means * probs)) / weight2
+        
+        # Between-class variance
+        # We ignore warnings for division by zero (handled by nan_to_num)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            variance_between = weight1 * weight2 * (mean1 - mean2)**2
+            variance_between = np.nan_to_num(variance_between)
+        
+        # Index of max variance
+        idx = np.argmax(variance_between)
+        
+        return float(means[idx])
 
     def preprocess_sentinel1(self, image):
         """

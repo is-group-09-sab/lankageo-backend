@@ -20,6 +20,7 @@ class Sentinel1Request(BaseModel):
     preprocess: bool = Field(default=False, description="Whether to apply speckle filtering and dB conversion")
     compare_with_baseline: bool = Field(default=False, description="Whether to perform change detection against a baseline image")
     baseline_days: int = Field(default=30, description="How many days back to look for a baseline image")
+    use_otsu: bool = Field(default=False, description="Whether to use Otsu thresholding for change detection")
 
 class Sentinel2Request(BaseModel):
     """

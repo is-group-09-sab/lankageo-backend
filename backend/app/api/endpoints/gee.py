@@ -75,7 +75,11 @@ async def get_sentinel1_metadata(request: Sentinel1Request):
                 response["message"] = "Post-image found, but no matching baseline image exists for this orbit."
             else:
                 # Run the ratio calculation
-                change_image = gee_service.compute_change_ratio(baseline_image, image)
+                change_image = gee_service.compute_change_ratio(
+                    baseline_image, 
+                    image, 
+                    use_otsu=request.use_otsu
+                )
                 
                 # Calculate statistics
                 stats = change_image.reduceRegion(
@@ -85,12 +89,16 @@ async def get_sentinel1_metadata(request: Sentinel1Request):
                     maxPixels=1e9
                 ).getInfo()
                 
+                # Extract the threshold used
+                applied_threshold = change_image.get('applied_threshold').getInfo()
+                
                 response["baseline_image_id"] = baseline_image.get('system:index').getInfo()
                 response["baseline_date"] = baseline_image.get('system:time_start').getInfo()
                 response["change_ratio_mean"] = stats.get('change_ratio')
+                response["otsu_threshold"] = applied_threshold
                 response["flood_detected"] = stats.get('flood_mask') > 0.05 # Simple heuristic: if >5% of area is flooded
                 response["processed"] = True
-                response["method"] = "change_detection_ratio"
+                response["method"] = "change_detection_ratio_otsu" if request.use_otsu else "change_detection_ratio_static"
 
         return response
     except Exception as e:
