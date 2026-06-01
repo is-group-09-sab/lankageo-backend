@@ -288,6 +288,23 @@ class GEEService:
         # Add the new band back to the original image so it carries all metadata
         return image.addBands(vv_db)
 
+    def compute_ndwi(self, image, threshold: float = 0.3):
+        """
+        Computes the Normalized Difference Water Index (NDWI) for Sentinel-2.
+        
+        Formula: (Green - NIR) / (Green + NIR) => (B3 - B8) / (B3 + B8)
+        """
+        # 1. Calculate NDWI
+        # ndwi = image.normalizedDifference(['B3', 'B8']).rename('NDWI')
+        # Standard NDWI (McFeeters) uses Green and NIR
+        ndwi = image.normalizedDifference(['B3', 'B8']).rename('NDWI')
+
+        # 2. Create binary water mask
+        water_mask = ndwi.gt(threshold).rename('ndwi_water_mask')
+
+        # Return concatenated image
+        return image.addBands([ndwi, water_mask])
+
     def get_sentinel2_collection(self, lat: float, lon: float, buffer_meters: float, start_date: str, end_date: str, cloud_percentage: int = 20):
         """
         Filters the Sentinel-2 (Optical) collection with cloud masking.

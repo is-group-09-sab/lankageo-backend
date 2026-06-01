@@ -125,12 +125,31 @@ async def get_sentinel2_metadata(request: Sentinel2Request):
                 "message": "No clear Sentinel-2 images found for this criteria."
             }
             
-        return {
+        response = {
             "status": "success",
             "image_id": image.get('system:index').getInfo(),
             "date": image.get('system:time_start').getInfo(),
             "cloud_cover": image.get('CLOUDY_PIXEL_PERCENTAGE').getInfo()
         }
+
+        # 2. Apply NDWI if requested (LG-107)
+        if request.calculate_ndwi:
+            ndwi_image = gee_service.compute_ndwi(image)
+            
+            # Get the mean NDWI value and water percentage for the ROI
+            stats = ndwi_image.select(['NDWI', 'ndwi_water_mask']).reduceRegion(
+                reducer=ee.Reducer.mean(),
+                geometry=image.geometry(),
+                scale=10,
+                maxPixels=1e9
+            ).getInfo()
+            
+            response["ndwi_mean"] = stats.get('NDWI')
+            response["water_percentage"] = (stats.get('ndwi_water_mask') or 0) * 100
+            response["processed"] = True
+            response["method"] = "ndwi_optical"
+
+        return response
     except Exception as e:
         logger.error(f"Error in Sentinel-2 search: {e}")
         raise HTTPException(status_code=500, detail=str(e))

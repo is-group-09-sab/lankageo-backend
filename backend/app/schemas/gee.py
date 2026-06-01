@@ -30,3 +30,4 @@ class Sentinel2Request(BaseModel):
     start_date: str = Field(..., description="Start date in YYYY-MM-DD format")
     end_date: str = Field(..., description="End date in YYYY-MM-DD format")
     cloud_percentage: Optional[int] = Field(default=20, description="Maximum allowed cloudy pixel percentage")
+    calculate_ndwi: bool = Field(default=False, description="Whether to calculate the Normalized Difference Water Index (NDWI)")
