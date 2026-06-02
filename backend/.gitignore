@@ -1,16 +1,25 @@
-# Byte-compiled / optimized / DLL files
-__pycache__/
-*.py[cod]
-*$py.class
+# Python bytecode files
+*.pyc
+*.pyo
+*.pyd
 
-# Environments
-.env
-.venv
-env/
+# Python cache directories
+__pycache__/
+
+# Virtual environments
 venv/
+.venv/
+env/
 ENV/
 env.bak/
 venv.bak/
+
+# Environment variables
+.env
+
+# IDE settings
+.vscode/
+.idea/
 
 # OS X
 .DS_Store
