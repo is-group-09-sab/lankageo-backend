@@ -172,19 +172,23 @@ class GEEService:
         
         return collection, roi
 
-    def get_latest_s1_image(self, lat: float, lon: float, buffer_meters: float, start_date: str, end_date: str):
+    def get_latest_s1_image(self, lat: float, lon: float, buffer_meters: float, start_date: str, end_date: str, orbit_pass: str = "DESCENDING"):
         """
         Retrieves the most recent Sentinel-1 image mosaic for the given parameters.
         """
         collection, roi = self.get_sentinel1_collection(lat, lon, buffer_meters, start_date, end_date)
         
+        # Apply orbit pass filter if specified
+        if orbit_pass:
+            collection = collection.filter(ee.Filter.eq('orbitProperties_pass', orbit_pass))
+
         # Check if the collection is empty before proceeding
         count = collection.size().getInfo()
         if count == 0:
             return None
             
         # Sort by system:time_start (date) in descending order and take the first one
-        latest_image = collection.sort('system:time_start', False).first()
+        latest_image = ee.Image(collection.sort('system:time_start', False).first())
         
         if not latest_image:
             return None
@@ -192,27 +196,250 @@ class GEEService:
         # Clip the image to our exact ROI so we don't process unnecessary data
         return latest_image.clip(roi)
 
+    def get_baseline_s1_image(self, post_image, days_back: int = 30):
+        """
+        Finds a baseline Sentinel-1 image from the same relative orbit as the post-event image.
+        
+        Args:
+            post_image: The ee.Image representing the post-event state.
+            days_back: Number of days prior to look for a baseline.
+        """
+        # 1. Extract orbital metadata from the post-event image
+        # This is critical for matching the geometry (incidence angle)
+        relative_orbit = post_image.get('relativeOrbitNumber_start')
+        orbit_pass = post_image.get('orbitProperties_pass')
+        post_date = ee.Date(post_image.get('system:time_start'))
+        roi = post_image.geometry()
+
+        # 2. Define the baseline search window
+        # We look for images ~30 days prior to the post-event image
+        pre_date_start = post_date.advance(-days_back - 15, 'day')
+        pre_date_end = post_date.advance(-days_back + 15, 'day')
+
+        # 3. Filter the collection for the same orbital parameters
+        baseline_collection = (ee.ImageCollection('COPERNICUS/S1_GRD')
+                               .filterBounds(roi)
+                               .filterDate(pre_date_start, pre_date_end)
+                               .filter(ee.Filter.eq('relativeOrbitNumber_start', relative_orbit))
+                               .filter(ee.Filter.eq('orbitProperties_pass', orbit_pass))
+                               .filter(ee.Filter.eq('instrumentMode', 'IW')))
+
+        # Check if we found anything
+        count = baseline_collection.size().getInfo()
+        if count == 0:
+            return None
+
+        # Sort by proximity to the target days_back (closest to post_date - days_back)
+        target_date = post_date.advance(-days_back, 'day')
+        
+        def add_date_diff(img):
+            diff = ee.Number(img.get('system:time_start')).subtract(target_date.millis()).abs()
+            return img.set('date_diff', diff)
+
+        baseline_image = ee.Image(baseline_collection.map(add_date_diff).sort('date_diff').first())
+
+        return baseline_image.clip(roi)
+
+    def compute_change_ratio(self, pre_image, post_image, threshold: float = 1.25, use_otsu: bool = False):
+        """
+        Computes the change ratio between pre and post images for flood detection.
+        
+        Formula: Pre_event / Post_event (in linear scale)
+        Logic: Water decreases backscatter, so Pre/Post > 1 indicates new water.
+        """
+        # 1. Pre-process both images (Speckle filtering is essential)
+        # We MUST convert from dB to linear before calculating ratios
+        pre_vv_linear = ee.Image(10.0).pow(pre_image.select('VV').divide(10.0)).focal_mean(7, 'circle', 'pixels')
+        post_vv_linear = ee.Image(10.0).pow(post_image.select('VV').divide(10.0)).focal_mean(7, 'circle', 'pixels')
+
+        # 2. Compute Ratio (Pre / Post)
+        ratio = pre_vv_linear.divide(post_vv_linear).rename('change_ratio')
+
+        # 3. Dynamic Thresholding (Otsu) if requested
+        final_threshold = threshold
+        if use_otsu:
+            try:
+                # Calculate histogram of the ratio image
+                # We use a 0.05 bucket width to capture the split between land and water
+                hist = ratio.reduceRegion(
+                    reducer=ee.Reducer.histogram(255, 0.05),
+                    geometry=post_image.geometry(),
+                    scale=30,
+                    maxPixels=1e9
+                ).get('change_ratio').getInfo()
+                
+                if hist:
+                    final_threshold = self._calculate_otsu_threshold(hist)
+                    logger.info(f"Calculated dynamic Otsu threshold: {final_threshold}")
+            except Exception as e:
+                logger.warning(f"Otsu calculation failed, falling back to static threshold: {e}")
+
+        # 4. Apply Threshold
+        flood_mask = ratio.gt(final_threshold).rename('flood_mask')
+
+        # Return the multi-band image containing the ratio and the binary mask
+        # We also store the threshold used in the image properties for traceability
+        return ee.Image.cat([ratio, flood_mask]).set('applied_threshold', final_threshold)
+
+    def _calculate_otsu_threshold(self, hist_data):
+        """
+        Implementation of the Otsu algorithm to find the optimal threshold 
+        by maximizing between-class variance.
+        """
+        import numpy as np
+        
+        counts = np.array(hist_data['histogram'])
+        means = np.array(hist_data['bucketMeans'])
+        
+        # Total number of pixels
+        total = counts.sum()
+        if total == 0:
+            return 1.25 # Fallback
+            
+        # Probability of each bucket
+        probs = counts / total
+        
+        # Cumulative sums
+        weight1 = np.cumsum(probs)
+        weight2 = 1.0 - weight1
+        
+        # Cumulative means
+        mean1 = np.cumsum(means * probs) / weight1
+        mean2 = (mean1[-1] * weight1[-1] - np.cumsum(means * probs)) / weight2
+        
+        # Between-class variance
+        # We ignore warnings for division by zero (handled by nan_to_num)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            variance_between = weight1 * weight2 * (mean1 - mean2)**2
+            variance_between = np.nan_to_num(variance_between)
+        
+        # Index of max variance
+        idx = np.argmax(variance_between)
+        
+        return float(means[idx])
+
     def preprocess_sentinel1(self, image):
         """
-        Applies speckle filtering and converts SAR backscatter to dB.
+        Applies speckle filtering and ensures the image has a VV_db band.
         
         Steps:
-        1. Focal Mean (7x7) to smooth radar noise (speckle).
-        2. Logarithmic conversion to Decibels (dB) for better contrast.
+        1. Convert to linear scale if necessary (S1_GRD is in dB).
+        2. Focal Mean (7x7) to smooth radar noise (speckle).
+        3. Convert back to dB for the feature stack.
         """
-        # 1. Select the VV band (vertical-vertical polarization)
+        # 1. Select the VV band
         vv = image.select('VV')
 
-        # 2. Apply Speckle Filter (Focal Mean 7x7)
-        # We use a circle kernel to smooth out the grainy 'salt and pepper' noise
-        smoothed = vv.focal_mean(7, 'circle', 'pixels')
+        # 2. Convert from dB to linear: 10^(dB/10)
+        # S1_GRD is log-scaled, so we MUST linearize before smoothing
+        vv_linear = ee.Image(10.0).pow(vv.divide(10.0))
 
-        # 3. Convert to dB: 10 * log10(Linear_Backscatter)
-        # This makes water appear very dark (low values) and land bright
-        vv_db = smoothed.log10().multiply(10).rename('VV_db')
+        # 3. Apply Speckle Filter (Focal Mean 7x7)
+        smoothed_linear = vv_linear.focal_mean(7, 'circle', 'pixels')
 
-        # Add the new band back to the original image so it carries all metadata
+        # 4. Convert back to dB: 10 * log10(Linear)
+        vv_db = smoothed_linear.log10().multiply(10).rename('VV_db')
+
+        # Add the new band back to the original image
         return image.addBands(vv_db)
+
+    def compute_ndwi(self, image, threshold: float = 0.3):
+        """
+        Computes the Normalized Difference Water Index (NDWI) for Sentinel-2.
+        
+        Formula: (Green - NIR) / (Green + NIR) => (B3 - B8) / (B3 + B8)
+        """
+        # 1. Calculate NDWI
+        ndwi = image.normalizedDifference(['B3', 'B8']).rename('NDWI')
+
+        # 2. Create binary water mask
+        water_mask = ndwi.gt(threshold).rename('ndwi_water_mask')
+
+        # Return concatenated image
+        return image.addBands([ndwi, water_mask])
+
+    def compute_ndvi(self, image):
+        """
+        Computes the Normalized Difference Vegetation Index (NDVI) for Sentinel-2.
+        
+        Formula: (NIR - Red) / (NIR + Red) => (B8 - B4) / (B8 + B4)
+        """
+        return image.normalizedDifference(['B8', 'B4']).rename('NDVI')
+
+    def compute_radar_ratio(self, image):
+        """
+        Computes the VH/VV ratio for Sentinel-1 in linear scale.
+        Useful for distinguishing between urban areas and open water.
+        """
+        # Convert both bands to linear before calculating ratio
+        vh_linear = ee.Image(10.0).pow(image.select('VH').divide(10.0))
+        vv_linear = ee.Image(10.0).pow(image.select('VV').divide(10.0))
+        
+        return vh_linear.divide(vv_linear).rename('VH_VV_ratio')
+
+    def get_terrain_data(self, roi):
+        """
+        Loads SRTM Elevation and HAND (Height Above Nearest Drainage) data.
+        Resamples to 10m resolution to match Sentinel data.
+        """
+        # 1. Load SRTM Elevation (30m)
+        elevation = ee.Image("USGS/SRTMGL1_003").select('elevation').rename('elevation')
+        
+        # 2. Load Global HAND (Height Above Nearest Drainage)
+        # We use MERIT Hydro as it is a high-quality, accessible global dataset
+        hand = ee.Image("MERIT/Hydro/v1_0_1").select('hnd').rename('HAND')
+        
+        # Combine and clip
+        terrain = ee.Image.cat([elevation, hand]).clip(roi)
+        
+        # 3. Resample to 10m using bilinear interpolation
+        # This ensures the terrain features align with the 10m satellite pixels
+        return terrain.resample('bilinear')
+
+    def create_rf_feature_stack(self, lat, lon, buffer, s1_start, s1_end, s2_start, s2_end, orbit_pass="DESCENDING"):
+        """
+        Orchestrates the creation of a 6-band feature stack for RF classification.
+        Bands: [VV_db, VH_VV_ratio, NDWI, NDVI, elevation, HAND]
+        """
+        if not self._initialized:
+            self.initialize()
+
+        # 1. Get Sentinel-1 (Radar)
+        s1_image = self.get_latest_s1_image(lat, lon, buffer, s1_start, s1_end, orbit_pass)
+        if not s1_image:
+            raise ValueError("No Sentinel-1 imagery found for the specified period.")
+        
+        # Preprocess S1 (Speckle + dB)
+        s1_processed = self.preprocess_sentinel1(s1_image)
+        vv_db = s1_processed.select('VV_db')
+        vh_vv = self.compute_radar_ratio(s1_image)
+        
+        # 2. Get Sentinel-2 (Optical)
+        s2_image = self.get_latest_s2_image(lat, lon, buffer, s2_start, s2_end)
+        if not s2_image:
+            raise ValueError("No Sentinel-2 imagery found for the specified period.")
+            
+        ndwi = self.compute_ndwi(s2_image).select('NDWI')
+        ndvi = self.compute_ndvi(s2_image)
+        
+        # 3. Get Terrain Data
+        terrain = self.get_terrain_data(s1_image.geometry())
+        
+        # 4. Final Stack (Concatenate all bands)
+        # We use s1_image.geometry() as the master projection template
+        stack = ee.Image.cat([
+            vv_db,
+            vh_vv,
+            ndwi,
+            ndvi,
+            terrain.select('elevation'),
+            terrain.select('HAND')
+        ]).clip(s1_image.geometry())
+        
+        return stack, {
+            "s1_id": s1_image.get('system:index').getInfo(),
+            "s2_id": s2_image.get('system:index').getInfo()
+        }
 
     def get_sentinel2_collection(self, lat: float, lon: float, buffer_meters: float, start_date: str, end_date: str, cloud_percentage: int = 20):
         """
@@ -236,6 +463,7 @@ class GEEService:
     def get_latest_s2_image(self, lat: float, lon: float, buffer_meters: float, start_date: str, end_date: str):
         """
         Retrieves the clearest and most recent Sentinel-2 image.
+        Normalized to 0-1 range by dividing by 10000.
         """
         collection, roi = self.get_sentinel2_collection(lat, lon, buffer_meters, start_date, end_date)
         
@@ -250,7 +478,9 @@ class GEEService:
         if not best_image:
             return None
             
-        return best_image.clip(roi)
+        # Divide by 10000 for reflectance normalization (LG-103)
+        # We copy properties to ensure metadata like 'system:index' is preserved
+        return ee.Image(best_image.divide(10000).copyProperties(best_image, best_image.propertyNames())).clip(roi)
 
     async def run_historical_analysis(
         self, lat: float, lng: float, radius_km: float, years: int
