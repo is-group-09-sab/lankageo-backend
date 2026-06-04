@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException
 from app.services.gee_service import gee_service
-from app.schemas.gee import Sentinel1Request, Sentinel2Request
+from app.schemas.gee import Sentinel1Request, Sentinel2Request, FeatureStackRequest
 import logging
 import ee
 
