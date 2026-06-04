@@ -14,6 +14,19 @@ class Settings(BaseSettings):
     # Google Earth Engine Settings
     GEE_SERVICE_ACCOUNT: Optional[str] = None
     GEE_PRIVATE_KEY: Optional[str] = None
+    GEE_SERVICE_ACCOUNT_FILE: Optional[str] = None
+    
+    # GEE User Credential Fallback (for restricted accounts)
+    GEE_CLIENT_ID: Optional[str] = None
+    GEE_CLIENT_SECRET: Optional[str] = None
+    GEE_REFRESH_TOKEN: Optional[str] = None
+    
+    GEE_PROJECT: Optional[str] = "lanka-geo"
+    
+    # Google Maps Platform Settings
+    GOOGLE_MAPS_JS_API_KEY: Optional[str] = None
+    GOOGLE_PLACES_API_KEY: Optional[str] = None
+    GOOGLE_MAPS_STATIC_API_KEY: Optional[str] = None
     
     model_config = SettingsConfigDict(env_file=".env", case_sensitive=True)
 
