@@ -31,3 +31,14 @@ class Sentinel2Request(BaseModel):
     end_date: str = Field(..., description="End date in YYYY-MM-DD format")
     cloud_percentage: Optional[int] = Field(default=20, description="Maximum allowed cloudy pixel percentage")
     calculate_ndwi: bool = Field(default=False, description="Whether to calculate the Normalized Difference Water Index (NDWI)")
+
+class FeatureStackRequest(BaseModel):
+    """
+    The data required to generate a multi-sensor feature stack for RF classification.
+    """
+    roi: PointROI
+    s1_start_date: str = Field(..., description="S1 start date")
+    s1_end_date: str = Field(..., description="S1 end date")
+    s2_start_date: str = Field(..., description="S2 start date")
+    s2_end_date: str = Field(..., description="S2 end date")
+    orbit_pass: Optional[str] = Field(default="DESCENDING")

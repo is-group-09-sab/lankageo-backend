@@ -153,3 +153,39 @@ async def get_sentinel2_metadata(request: Sentinel2Request):
     except Exception as e:
         logger.error(f"Error in Sentinel-2 search: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/feature-stack")
+async def get_feature_stack(request: FeatureStackRequest):
+    """
+    Generates a 6-band multi-sensor feature stack for the given ROI.
+    Bands: VV_db, VH_VV_ratio, NDWI, NDVI, Elevation, HAND
+    """
+    try:
+        stack, metadata = gee_service.create_rf_feature_stack(
+            request.roi.lat,
+            request.roi.lon,
+            request.roi.buffer_meters,
+            request.s1_start_date,
+            request.s1_end_date,
+            request.s2_start_date,
+            request.s2_end_date,
+            request.orbit_pass
+        )
+        
+        # Calculate mean values for the ROI to verify the stack is valid
+        stats = stack.reduceRegion(
+            reducer=ee.Reducer.mean(),
+            geometry=stack.geometry(),
+            scale=30,
+            maxPixels=1e9
+        ).getInfo()
+        
+        return {
+            "status": "success",
+            "metadata": metadata,
+            "feature_means": stats,
+            "bands": stack.bandNames().getInfo()
+        }
+    except Exception as e:
+        logger.error(f"Error generating feature stack: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
