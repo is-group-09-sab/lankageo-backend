@@ -441,6 +441,53 @@ class GEEService:
             "s2_id": s2_image.get('system:index').getInfo()
         }
 
+    def train_rf_classifier(self, training_data, features, label_property='label', num_trees=100):
+        """
+        Trains a Random Forest classifier in GEE.
+        
+        Args:
+            training_data: ee.FeatureCollection containing sampled features and labels.
+            features: List of band names to use as input features.
+            label_property: The property name for the ground truth label.
+            num_trees: Number of decision trees.
+        """
+        if not self._initialized:
+            self.initialize()
+            
+        classifier = ee.Classifier.smileRandomForest(num_trees).train(
+            features=training_data,
+            classProperty=label_property,
+            inputProperties=features
+        )
+        
+        return classifier
+
+    def validate_classifier(self, classifier, test_data, label_property='label'):
+        """
+        Validates a classifier using a test FeatureCollection.
+        Returns accuracy metrics.
+        """
+        validated = test_data.classify(classifier)
+        error_matrix = validated.errorMatrix(label_property, 'classification')
+        
+        return {
+            "accuracy": error_matrix.accuracy().getInfo(),
+            "kappa": error_matrix.kappa().getInfo(),
+            "consumers_accuracy": error_matrix.consumersAccuracy().getInfo(),
+            "producers_accuracy": error_matrix.producersAccuracy().getInfo()
+        }
+
+    def sample_features(self, feature_stack, points_fc, scale=10):
+        """
+        Samples values from a feature stack at the given point locations.
+        """
+        return feature_stack.sampleRegions(
+            collection=points_fc,
+            properties=[],
+            scale=scale,
+            geometries=True
+        )
+
     def get_sentinel2_collection(self, lat: float, lon: float, buffer_meters: float, start_date: str, end_date: str, cloud_percentage: int = 20):
         """
         Filters the Sentinel-2 (Optical) collection with cloud masking.
