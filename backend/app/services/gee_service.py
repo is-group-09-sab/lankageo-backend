@@ -461,6 +461,25 @@ class GEEService:
             logger.warning(f"Otsu mask calculation failed, using static fallback: {e}")
             return image.select(band).lt(-18).rename('otsu_water_mask')
 
+    def get_jrc_water_masks(self, roi):
+        """
+        Retrieves Permanent and Seasonal water masks from JRC Global Surface Water.
+        - Permanent: Water present > 10 months of the year.
+        - Seasonal: Water present 3-10 months of the year.
+        """
+        if not self._initialized:
+            self.initialize()
+            
+        # Load JRC Global Surface Water (v1.4)
+        jrc = ee.Image("JRC/GSW1_4/GlobalSurfaceWater").clip(roi)
+        seasonality = jrc.select('seasonality')
+        
+        # Define masks
+        permanent_water = seasonality.gt(10).rename('permanent_water')
+        seasonal_water = seasonality.gte(3).And(seasonality.lte(10)).rename('seasonal_water')
+        
+        return permanent_water, seasonal_water
+
     def detect_floods_ensemble(self, lat, lon, buffer, pre_start, pre_end, post_start, post_end, weights=None):
         """
         Ensemble flood detection using a weighted 3-signal approach.
@@ -469,6 +488,9 @@ class GEEService:
         1. SAR Change Detection (Ratio)
         2. SAR Post-Event Otsu Thresholding
         3. Random Forest Multi-sensor Classification
+        
+        Masks applied (LG-111):
+        - JRC Permanent water subtraction
         """
         if not self._initialized:
             self.initialize()
@@ -476,25 +498,28 @@ class GEEService:
         if weights is None:
             weights = {"rf": 0.5, "change": 0.3, "otsu": 0.2}
 
-        # 1. Get Base Images
+        # 1. Get Base Images and ROI
         s1_pre = self.get_latest_s1_image(lat, lon, buffer, pre_start, pre_end)
         s1_post = self.get_latest_s1_image(lat, lon, buffer, post_start, post_end)
         
         if not s1_pre or not s1_post:
             raise ValueError("Required Sentinel-1 imagery missing for ensemble.")
+            
+        roi = s1_post.geometry()
 
-        # 2. Signal 1: Change Detection (Ratio + Otsu)
+        # 2. Get JRC Water Masks (LG-111)
+        permanent_water, seasonal_water = self.get_jrc_water_masks(roi)
+
+        # 3. Signal 1: Change Detection (Ratio + Otsu)
         change_img = self.compute_change_ratio(s1_pre, s1_post, use_otsu=True)
         s1_change_mask = change_img.select('flood_mask')
 
-        # 3. Signal 2: Direct Post-Otsu
+        # 4. Signal 2: Direct Post-Otsu
         s1_post_otsu_mask = self.compute_otsu_mask(s1_post, 'VV')
 
-        # 4. Signal 3: Random Forest Classification
-        # We need S2 for the feature stack
+        # 5. Signal 3: Random Forest Classification
         s2_post = self.get_latest_s2_image(lat, lon, buffer, post_start, post_end)
         if not s2_post:
-            # Fallback if S2 is missing: Use SAR signals only
             logger.warning("Sentinel-2 missing for ensemble. Scaling SAR weights.")
             weights = {"change": 0.6, "otsu": 0.4, "rf": 0.0}
             rf_mask = ee.Image.constant(0)
@@ -502,39 +527,39 @@ class GEEService:
             feature_stack, _ = self.create_rf_feature_stack(
                 lat, lon, buffer, post_start, post_end, post_start, post_end
             )
-            
-            # Load the persisted model (using the latest version or a settings-defined ID)
             model_id = getattr(settings, "GEE_RF_MODEL_PATH", f"projects/{settings.GEE_PROJECT}/assets/flood_rf_model_1780752620")
             
             try:
-                # To use the classifier, we must parse it from the saved asset
                 model_asset = ee.FeatureCollection(model_id).first()
-                # Newer GEE Python API handles serialized classifiers
                 classifier = ee.Classifier.decisionTreeEnsemble(model_asset.get('classifier'))
                 rf_mask = feature_stack.classify(classifier).rename('rf_mask')
             except Exception as e:
                 logger.error(f"Failed to load RF model for ensemble at {model_id}: {e}")
-                # Fallback to SAR signals only
                 weights = {"change": 0.6, "otsu": 0.4, "rf": 0.0}
                 rf_mask = ee.Image.constant(0)
 
-        # 5. Weighted Ensemble Calculation
-        # Final Score = (W1 * S1) + (W2 * S2) + (W3 * S3)
+        # 6. Weighted Ensemble Calculation
         ensemble_score = s1_change_mask.multiply(weights["change"])\
             .add(s1_post_otsu_mask.multiply(weights["otsu"]))\
             .add(rf_mask.multiply(weights["rf"]))\
             .rename('ensemble_score')
 
-        # 6. Apply Consensus Threshold (0.5)
-        final_flood_mask = ensemble_score.gte(0.5).rename('final_flood_mask')
+        # 7. Apply Consensus Threshold (0.5)
+        raw_flood_mask = ensemble_score.gte(0.5)
+
+        # 8. Refine Flood Mask with JRC Subtraction (LG-111)
+        # We only want NEW flood water, so we subtract permanent bodies
+        final_flood_mask = raw_flood_mask.And(permanent_water.Not()).rename('final_flood_mask')
 
         return ee.Image.cat([
             ensemble_score, 
             final_flood_mask, 
             s1_change_mask.rename('signal_change'),
             s1_post_otsu_mask.rename('signal_otsu'),
-            rf_mask.rename('signal_rf')
-        ]).clip(s1_post.geometry()) # Ensure the result is bounded for reduceRegion
+            rf_mask.rename('signal_rf'),
+            permanent_water.rename('signal_permanent'),
+            seasonal_water.rename('signal_seasonal')
+        ]).clip(roi)
 
     def get_sentinel2_collection(self, lat: float, lon: float, buffer_meters: float, start_date: str, end_date: str, cloud_percentage: int = 20):
         """
