@@ -533,6 +533,40 @@ class GEEService:
         
         return permanent_water, seasonal_water
 
+    def classify_flood_risk(self, ensemble_img, terrain_img):
+        """
+        Classifies flood risk into three levels:
+        1. Seasonal (Level 1) - Based on JRC historical data
+        2. Moderate (Level 2) - Any signal OR HAND 2-20m
+        3. Critical (Level 3) - Ensemble Consensus AND HAND < 2m
+        """
+        # 1. Extract bands
+        ensemble_score = ensemble_img.select('ensemble_score')
+        final_flood_mask = ensemble_img.select('final_flood_mask')
+        seasonal_water = ensemble_img.select('signal_seasonal')
+        hand = terrain_img.select('HAND')
+        
+        # 2. Initialize risk image (0 = No Risk)
+        risk = ee.Image.constant(0).rename('risk_level')
+        
+        # 3. Apply hierarchy (Low level to High level)
+        # Level 1: Seasonal
+        risk = risk.where(seasonal_water.eq(1), 1)
+        
+        # Level 2: Moderate (Signal detected OR low-lying terrain)
+        moderate_mask = ensemble_score.gt(0).Or(hand.gt(2).And(hand.lt(20)))
+        risk = risk.where(moderate_mask, 2)
+        
+        # Level 3: Critical (Strong detection AND very low terrain)
+        critical_mask = final_flood_mask.eq(1).And(hand.lt(2))
+        risk = risk.where(critical_mask, 3)
+        
+        # Ensure permanent water bodies don't show risk
+        permanent_water = ensemble_img.select('signal_permanent')
+        risk = risk.where(permanent_water.eq(1), 0)
+        
+        return risk.uint8()
+
     def detect_floods_ensemble(self, lat, lon, buffer, pre_start, pre_end, post_start, post_end, weights=None):
         """
         Ensemble flood detection using a weighted 3-signal approach.
@@ -542,8 +576,8 @@ class GEEService:
         2. SAR Post-Event Otsu Thresholding
         3. Random Forest Multi-sensor Classification
         
-        Masks applied (LG-111):
-        - JRC Permanent water subtraction
+        Risk Classification (LG-112):
+        - Critical / Moderate / Seasonal
         """
         if not self._initialized:
             self.initialize()
@@ -580,11 +614,11 @@ class GEEService:
             feature_stack, _ = self.create_rf_feature_stack(
                 lat, lon, buffer, post_start, post_end, post_start, post_end
             )
-            model_id = getattr(settings, "GEE_RF_MODEL_PATH", f"projects/{settings.GEE_PROJECT}/assets/flood_rf_model_1780752620")
-            
+            model_id = getattr(settings, "GEE_RF_MODEL_PATH", f"projects/{settings.GEE_PROJECT}/assets/flood_rf_model_1780753896")
             try:
                 model_asset = ee.FeatureCollection(model_id).first()
-                classifier = ee.Classifier.decisionTreeEnsemble(model_asset.get('classifier'))
+                # Correct way to load a serialized classifier: list of strings
+                classifier = ee.Classifier.decisionTreeEnsemble([model_asset.get('classifier')])
                 rf_mask = feature_stack.classify(classifier).rename('rf_mask')
             except Exception as e:
                 logger.error(f"Failed to load RF model for ensemble at {model_id}: {e}")
@@ -601,10 +635,12 @@ class GEEService:
         raw_flood_mask = ensemble_score.gte(0.5)
 
         # 8. Refine Flood Mask with JRC Subtraction (LG-111)
-        # We only want NEW flood water, so we subtract permanent bodies
         final_flood_mask = raw_flood_mask.And(permanent_water.Not()).rename('final_flood_mask')
 
-        return ee.Image.cat([
+        # 9. Risk Classification (LG-112)
+        terrain_img = self.get_terrain_data(roi)
+        
+        ensemble_img = ee.Image.cat([
             ensemble_score, 
             final_flood_mask, 
             s1_change_mask.rename('signal_change'),
@@ -612,7 +648,50 @@ class GEEService:
             rf_mask.rename('signal_rf'),
             permanent_water.rename('signal_permanent'),
             seasonal_water.rename('signal_seasonal')
-        ]).clip(roi)
+        ])
+        
+        risk_level = self.classify_flood_risk(ensemble_img, terrain_img)
+
+        return ensemble_img.addBands(risk_level).clip(roi)
+
+    def vectorize_risk_zones(self, risk_img, roi, scale=30):
+        """
+        Converts the raster risk classification into vectorized GeoJSON polygons.
+        Includes area calculation and filtering for performance.
+        """
+        if not self._initialized:
+            self.initialize()
+
+        # 1. Clean the raster to remove single-pixel noise (Topological Cleaning)
+        # Using a 3x3 modal filter
+        cleaned_risk = risk_img.focal_mode(radius=1.5, kernelType='square', units='pixels')
+
+        # 2. Vectorize levels 1, 2, and 3 (Exclude Level 0)
+        # We mask out 0 so it's not vectorized
+        vector_ready = cleaned_risk.updateMask(cleaned_risk.neq(0))
+
+        vectors = vector_ready.reduceToVectors(
+            geometry=roi,
+            scale=scale,
+            geometryType='polygon',
+            eightConnected=True,
+            labelProperty='severity_level',
+            bestEffort=True,
+            maxPixels=1e8
+        )
+
+        # 3. Post-Process: Calculate area and filter small noise
+        def add_area_info(feature):
+            area = feature.geometry().area().divide(1e6) # Area in km2
+            return feature.set({
+                'area_km2': area,
+                'zone_id': feature.id()
+            })
+
+        # Apply area calculation and filter out very small polygons (< 0.01 km2)
+        processed_vectors = vectors.map(add_area_info).filter(ee.Filter.gt('area_km2', 0.01))
+
+        return processed_vectors
 
     def get_sentinel2_collection(self, lat: float, lon: float, buffer_meters: float, start_date: str, end_date: str, cloud_percentage: int = 20):
         """

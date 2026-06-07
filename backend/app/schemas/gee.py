@@ -34,7 +34,7 @@ class Sentinel2Request(BaseModel):
 
 class FeatureStackRequest(BaseModel):
     """
-    The data required to generate a multi-sensor feature stack for RF classification.
+    Request for multi-sensor feature stack.
     """
     roi: PointROI
     s1_start_date: str = Field(..., description="S1 start date")
@@ -42,3 +42,15 @@ class FeatureStackRequest(BaseModel):
     s2_start_date: str = Field(..., description="S2 start date")
     s2_end_date: str = Field(..., description="S2 end date")
     orbit_pass: Optional[str] = Field(default="DESCENDING")
+
+class EnsembleRequest(BaseModel):
+    """
+    Request for 3-signal weighted ensemble flood detection.
+    """
+    roi: PointROI
+    pre_start_date: str = Field(..., description="Baseline start date")
+    pre_end_date: str = Field(..., description="Baseline end date")
+    post_start_date: str = Field(..., description="Post-event start date")
+    post_end_date: str = Field(..., description="Post-event end date")
+    weights: Optional[dict] = Field(default={"rf": 0.5, "change": 0.3, "otsu": 0.2})
+
