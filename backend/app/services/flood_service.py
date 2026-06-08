@@ -68,12 +68,12 @@ class FloodService:
     async def process_flood_analysis(self, request: FloodAnalysisRequest) -> Dict[str, Any]:
         # 1. Check Cache
         cached = await self.get_cached_result(request.lat, request.lng)
-        if cached:
+        if cached and not request.override_date:
             return cached
 
         # 2. Run GEE Analysis
         analysis_data = gee_service.run_live_analysis(
-            request.lat, request.lng, request.radius_km
+            request.lat, request.lng, request.radius_km, request.override_date
         )
 
         # 3. Prepare Persistence Data

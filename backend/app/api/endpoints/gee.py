@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException
 from app.services.gee_service import gee_service
-from app.schemas.gee import Sentinel1Request, Sentinel2Request, FeatureStackRequest
+from app.schemas.gee import Sentinel1Request, Sentinel2Request, FeatureStackRequest, EnsembleRequest
 import logging
 import ee
 
@@ -96,7 +96,7 @@ async def get_sentinel1_metadata(request: Sentinel1Request):
                 response["baseline_date"] = baseline_image.get('system:time_start').getInfo()
                 response["change_ratio_mean"] = stats.get('change_ratio')
                 response["otsu_threshold"] = applied_threshold
-                response["flood_detected"] = stats.get('flood_mask') > 0.05 # Simple heuristic: if >5% of area is flooded
+                response["flood_detected"] = (stats.get('flood_mask') or 0) > 0.05
                 response["processed"] = True
                 response["method"] = "change_detection_ratio_otsu" if request.use_otsu else "change_detection_ratio_static"
 
@@ -152,61 +152,60 @@ async def get_sentinel2_metadata(request: Sentinel2Request):
         return response
     except Exception as e:
         logger.error(f"Error in Sentinel-2 search: {e}")
-        from app.schemas.gee import Sentinel1Request, Sentinel2Request, FeatureStackRequest, EnsembleRequest
-        ...
-        @router.post("/detect-ensemble")
-        async def detect_ensemble(request: EnsembleRequest):
-            """
-            Runs the 3-signal weighted ensemble flood detection with risk classification.
-            Returns Map ID for visualization and area statistics.
-            """
-            try:
-                ensemble_img = gee_service.detect_floods_ensemble(
-                    request.roi.lat,
-                    request.roi.lon,
-                    request.roi.buffer_meters,
-                    request.pre_start_date,
-                    request.pre_end_date,
-                    request.post_start_date,
-                    request.post_end_date,
-                    request.weights
-                )
+        raise HTTPException(status_code=500, detail=str(e))
 
-                # 1. Calculate Area Statistics for Risk Levels
-                # (0=None, 1=Seasonal, 2=Moderate, 3=Critical)
-                stats = ensemble_img.select('risk_level').reduceRegion(
-                    reducer=ee.Reducer.frequencyHistogram(),
-                    geometry=ensemble_img.geometry(),
-                    scale=30,
-                    maxPixels=1e9
-                ).get('risk_level').getInfo()
+@router.post("/detect-ensemble")
+async def detect_ensemble(request: EnsembleRequest):
+    """
+    Runs the 3-signal weighted ensemble flood detection with risk classification.
+    Returns Map ID for visualization and area statistics.
+    """
+    try:
+        ensemble_img = gee_service.detect_floods_ensemble(
+            request.roi.lat,
+            request.roi.lon,
+            request.roi.buffer_meters,
+            request.pre_start_date,
+            request.pre_end_date,
+            request.post_start_date,
+            request.post_end_date,
+            request.weights
+        )
 
-                # 2. Generate Map ID for Visualization
-                # Palette: 0:transparent, 1:Blue(Seasonal), 2:Amber(Moderate), 3:Red(Critical)
-                viz_params = {
-                    'min': 0,
-                    'max': 3,
-                    'palette': ['00000000', '0000FF', 'FFA500', 'FF0000']
-                }
-                map_id_dict = ensemble_img.select('risk_level').getMapId(viz_params)
+        # 1. Calculate Area Statistics for Risk Levels
+        # (0=None, 1=Seasonal, 2=Moderate, 3=Critical)
+        stats_obj = ensemble_img.select('risk_level').reduceRegion(
+            reducer=ee.Reducer.frequencyHistogram(),
+            geometry=ensemble_img.geometry(),
+            scale=30,
+            maxPixels=1e9
+        ).get('risk_level').getInfo()
 
-                # 3. Vectorize Risk Zones (LG-113)
-                vector_fc = gee_service.vectorize_risk_zones(
-                    ensemble_img.select('risk_level'),
-                    ensemble_img.geometry()
-                )
+        # 2. Generate Map ID for Visualization
+        # Palette: 0:transparent, 1:Blue(Seasonal), 2:Amber(Moderate), 3:Red(Critical)
+        viz_params = {
+            'min': 0,
+            'max': 3,
+            'palette': ['00000000', '0000FF', 'FFA500', 'FF0000']
+        }
+        map_id_dict = ensemble_img.select('risk_level').getMapId(viz_params)
 
-                return {
-                    "status": "success",
-                    "map_url": map_id_dict['tile_fetcher'].url_format,
-                    "risk_statistics": stats,
-                    "risk_polygons": vector_fc.getInfo(), # Returns GeoJSON FeatureCollection
-                    "metadata": {
-                        "weights_used": request.weights,
-                        "center": [request.roi.lat, request.roi.lon]
-                    }
-                }
-            except Exception as e:
-                logger.error(f"Error in ensemble detection: {e}")
-                raise HTTPException(status_code=500, detail=str(e))
+        # 3. Vectorize Risk Zones (LG-113)
+        vector_fc = gee_service.vectorize_risk_zones(
+            ensemble_img.select('risk_level'),
+            ensemble_img.geometry()
+        )
 
+        return {
+            "status": "success",
+            "map_url": map_id_dict['tile_fetcher'].url_format,
+            "risk_statistics": stats_obj,
+            "risk_polygons": vector_fc.getInfo(), # Returns GeoJSON FeatureCollection
+            "metadata": {
+                "weights_used": request.weights,
+                "center": [request.roi.lat, request.roi.lon]
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error in ensemble detection: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
