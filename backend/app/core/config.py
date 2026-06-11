@@ -23,6 +23,11 @@ class Settings(BaseSettings):
     
     GEE_PROJECT: Optional[str] = "lanka-geo"
     
+    # Google Maps Platform Settings
+    GOOGLE_MAPS_JS_API_KEY: Optional[str] = None
+    GOOGLE_PLACES_API_KEY: Optional[str] = None
+    GOOGLE_MAPS_STATIC_API_KEY: Optional[str] = None
+    
     model_config = SettingsConfigDict(env_file=".env", case_sensitive=True)
 
 settings = Settings()

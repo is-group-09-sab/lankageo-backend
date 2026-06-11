@@ -1,0 +1,44 @@
+from pydantic import BaseModel, Field
+from typing import List, Dict, Any, Optional
+
+class TrendAnalysisRequest(BaseModel):
+    lat: float = Field(..., description="Latitude of the center point")
+    lng: float = Field(..., description="Longitude of the center point")
+    radius_km: float = Field(..., description="Analysis radius in kilometers")
+    years: int = Field(default=5, ge=1, le=20, description="Number of years for historical analysis")
+
+class YearData(BaseModel):
+    year: int
+    value: float
+    details: Optional[Dict[str, Any]] = None
+
+class ZoneSeverityCount(BaseModel):
+    severity: str
+    count: int
+
+class TrendAnalysisResponse(BaseModel):
+    years_data: List[YearData] = Field(..., description="Historical data trend over the specified years")
+    composite_tile_url: str = Field(..., description="URL for the composite risk tile layer")
+    avg_ffi: float = Field(..., description="Average Forest Fire Index (FFI) over the period")
+    peak_year: int = Field(..., description="Year with the highest recorded risk")
+    min_year: int = Field(..., description="Year with the lowest recorded risk")
+    trend_heatmap_url: str = Field(..., description="URL for the historical trend heatmap")
+    zone_count_by_severity: List[ZoneSeverityCount] = Field(..., description="Count of zones categorized by risk severity")
+
+class AnalysisRequestRecord(BaseModel):
+    """Schema for persisting the parent Request record"""
+    id: Optional[str] = None
+    lat: float
+    lng: float
+    radius_km: float
+    request_type: str = "historical_trend"
+    status: str = "completed"
+
+class HistoricalRiskProfileRecord(BaseModel):
+    """Schema for persisting the Historical_Risk_Profile record"""
+    id: Optional[str] = None
+    request_id: str
+    avg_ffi: float
+    peak_year: int
+    min_year: int
+    data_payload: Dict[str, Any]
