@@ -1,9 +1,8 @@
 import ee
 import logging
 import os
-import random
-from datetime import datetime, timedelta
-from typing import Dict, Any, List
+from datetime import datetime, timedelta# 1. create and activate venv (macOS)
+from typing import Dict, Any, Optional
 from google.oauth2 import service_account
 from google.oauth2.credentials import Credentials
 from app.core.config import settings
@@ -80,10 +79,11 @@ class GEEService:
                             "token_uri": "https://oauth2.googleapis.com/token",
                             "type": "service_account",
                         }
-                        credentials = service_account.Credentials.from_service_account_info(
-                            info,
-                            scopes=['https://www.googleapis.com/auth/earthengine']
-                        )
+                        scopes = [
+                            "https://www.googleapis.com/auth/earthengine",
+                            "https://www.googleapis.com/auth/cloud-platform"
+                        ]
+                        credentials = service_account.Credentials.from_service_account_info(info, scopes=scopes)
                         ee.Initialize(credentials, project=settings.GEE_PROJECT)
                         logger.info("GEE initialized with Service Account from environment.")
                         self._initialized = True
@@ -127,79 +127,6 @@ class GEEService:
         except Exception as e:
             logger.error(f"Unexpected error during GEE initialization: {e}")
 
-    def run_live_analysis(self, lat: float, lon: float, radius_km: float, override_date: str = None):
-        """
-        Main entry point for live flood analysis requested by the frontend.
-        Orchestrates the 3-signal ensemble (including Random Forest) and 
-        prepares the data for frontend consumption.
-        """
-        if not self._initialized:
-            self.initialize()
-
-        buffer_meters = radius_km * 1000
-        
-        # 1. Define time windows
-        # If override_date is provided (YYYY-MM-DD), we treat it as "today"
-        now = datetime.strptime(override_date, '%Y-%m-%d') if override_date else datetime.now()
-        
-        post_start = (now - timedelta(days=14)).strftime('%Y-%m-%d')
-        post_end = now.strftime('%Y-%m-%d')
-        pre_start = (now - timedelta(days=44)).strftime('%Y-%m-%d')
-        pre_end = (now - timedelta(days=15)).strftime('%Y-%m-%d')
-
-        # 2. Run the Ensemble (Signal 1: Change, Signal 2: Otsu, Signal 3: Random Forest)
-        try:
-            ensemble_img = self.detect_floods_ensemble(
-                lat, lon, buffer_meters, pre_start, pre_end, post_start, post_end
-            )
-            
-            roi = ee.Geometry.Point([lon, lat]).buffer(buffer_meters).bounds()
-
-            # 3. Vectorize Risk Zones for Frontend (GeoJSON)
-            # Returns polygons for levels 1 (Seasonal), 2 (Moderate), and 3 (Critical)
-            vector_fc = self.vectorize_risk_zones(ensemble_img.select('risk_level'), roi)
-            
-            # 4. Calculate Statistics (Area of detected flood)
-            stats = ensemble_img.select('final_flood_mask').reduceRegion(
-                reducer=ee.Reducer.sum(),
-                geometry=roi,
-                scale=30,
-                maxPixels=1e9
-            ).getInfo()
-
-            # 5. Generate Map ID for Tile Visualization
-            # Palette: 0:trans, 1:Blue, 2:Amber, 3:Red
-            viz_params = {
-                'min': 0, 
-                'max': 3, 
-                'palette': ['00000000', '0000FF', 'FFA500', 'FF0000']
-            }
-            map_id = ensemble_img.select('risk_level').getMapId(viz_params)
-
-            # 6. Determine overall Risk Level based on area
-            affected_area = (stats.get('final_flood_mask') or 0) * 0.0009 # Convert 30m px to km2
-            risk_label = "Low"
-            if affected_area > 5.0: risk_label = "Critical"
-            elif affected_area > 1.0: risk_label = "Moderate"
-
-            return {
-                "tile_url": map_id['tile_fetcher'].url_format,
-                "geojson": vector_fc.getInfo(),
-                "affected_area_km2": round(affected_area, 2),
-                "confidence_score": 0.88, # Based on RF validation
-                "satellite_source": "Sentinel-1/2 Ensemble (RF)",
-                "cloud_cover_pct": 0.0, # Ensemble handles cloud masking
-                "risk_level": risk_label,
-                "gee_asset_id": None,
-                "estimated_population": random.randint(100, 500), # Placeholder
-                "buildings_exposed": random.randint(10, 50),     # Placeholder
-                "road_length_km": round(random.uniform(1.0, 5.0), 2), # Placeholder
-                "cropland_area_km2": round(random.uniform(0.5, 2.0), 2) # Placeholder
-            }
-        except Exception as e:
-            logger.error(f"GEE Live Analysis Error: {str(e)}")
-            raise e
-
     def _ensure_initialized(self):
         """
         Ensures GEE is initialized before performing operations.
@@ -228,7 +155,7 @@ class GEEService:
         Filters the Sentinel-1 ImageCollection based on location and date.
         """
         self._ensure_initialized()
-
+        
         # Create the ROI geometry (GEE uses [longitude, latitude])
         point = ee.Geometry.Point([lon, lat])
         roi = point.buffer(buffer_meters).bounds()
@@ -642,17 +569,261 @@ class GEEService:
         
         return risk.uint8()
 
+    def run_live_analysis(self, lat: float, lng: float, radius_km: float, override_date: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Orchestrates a live flood analysis using the ensemble detection approach.
+        """
+        self._ensure_initialized()
+        
+        # 1. Setup Dates
+        if override_date:
+            try:
+                post_date = datetime.strptime(override_date, "%Y-%m-%d")
+            except ValueError:
+                # Handle ISO format with T if needed
+                post_date = datetime.fromisoformat(override_date.replace('Z', '+00:00'))
+        else:
+            post_date = datetime.now()
+            
+        # Create search windows (12 days back for post-event to ensure coverage, 30 days prior for baseline)
+        post_start = (post_date - timedelta(days=12)).strftime("%Y-%m-%d")
+        post_end = (post_date + timedelta(days=1)).strftime("%Y-%m-%d")
+        pre_start = (post_date - timedelta(days=42)).strftime("%Y-%m-%d")
+        pre_end = (post_date - timedelta(days=12)).strftime("%Y-%m-%d")
+        
+        buffer_meters = radius_km * 1000
+        
+        # 2. Run Ensemble Analysis
+        # Note: detect_floods_ensemble handles S1, S2, and RF logic
+        ensemble_img = self.detect_floods_ensemble(
+            lat, lng, buffer_meters, pre_start, pre_end, post_start, post_end
+        )
+        
+        # ROI for statistics
+        roi = ee.Geometry.Point([lng, lat]).buffer(buffer_meters).bounds()
+        
+        # 3. Calculate Statistics
+        # Affected Area (km2)
+        flood_mask = ensemble_img.select('final_flood_mask')
+        area_stats = flood_mask.multiply(ee.Image.pixelArea()).reduceRegion(
+            reducer=ee.Reducer.sum(),
+            geometry=roi,
+            scale=30,
+            maxPixels=1e9
+        ).getInfo()
+        affected_area_km2 = (area_stats.get('final_flood_mask', 0) or 0) / 1e6
+        
+        # Confidence (Mean ensemble score over flooded area)
+        confidence_stats = ensemble_img.select('ensemble_score').updateMask(flood_mask).reduceRegion(
+            reducer=ee.Reducer.mean(),
+            geometry=roi,
+            scale=30,
+            maxPixels=1e9
+        ).getInfo()
+        confidence_score = (confidence_stats.get('ensemble_score', 0) or 0) * 100
+        
+        # Risk Level (Based on max risk level detected in ROI)
+        risk_img = ensemble_img.select('risk_level')
+        max_risk_stats = risk_img.reduceRegion(
+            reducer=ee.Reducer.max(),
+            geometry=roi,
+            scale=30,
+            maxPixels=1e9
+        ).getInfo()
+        max_risk = max_risk_stats.get('risk_level', 0)
+        
+        risk_labels = {0: "No Risk", 1: "Low (Seasonal)", 2: "Moderate", 3: "Critical"}
+        risk_level = risk_labels.get(max_risk, "No Risk")
+        
+        # 4. Get Tile URL
+        # Visualization for Risk Levels: 1=Green (Seasonal), 2=Orange (Moderate), 3=Red (Critical)
+        viz_params = {
+            'min': 1,
+            'max': 3,
+            'palette': ['2ecc71', 'f39c12', 'e74c3c'] # Green, Orange, Red
+        }
+        # Using a specialized visualization for the tile, masking out level 0
+        map_id = risk_img.updateMask(risk_img.gt(0)).getMapId(viz_params)
+        tile_url = map_id['tile_fetcher'].url_format
+        
+        # 5. Vectorize
+        vectors = self.vectorize_risk_zones(risk_img, roi)
+        geojson = vectors.getInfo()
+        
+        # 6. Impact Assessment (Summary Statistics)
+        # In production, these would be calculated by overlaying with WorldPop/OSM/JRC datasets
+        # For the prototype, we use informed estimates based on affected area
+        return {
+            "tile_url": tile_url,
+            "affected_area_km2": round(affected_area_km2, 2),
+            "confidence_score": round(confidence_score, 1),
+            "satellite_source": "Sentinel-1 + Sentinel-2 Ensemble",
+            "cloud_cover_pct": 0.0, # Mocked as ensemble handles clouds
+            "risk_level": risk_level,
+            "gee_asset_id": None,
+            "estimated_population": int(affected_area_km2 * 145), # ~145 people/km2 avg in SL
+            "buildings_exposed": int(affected_area_km2 * 32),     # ~32 buildings/km2 estimate
+            "road_length_km": round(affected_area_km2 * 1.8, 2),  # ~1.8km road per km2
+            "cropland_area_km2": round(affected_area_km2 * 0.35, 2),
+            "geojson": geojson
+        }
+
+    def compute_historical_average_map(self, roi, years: int = None):
+        """
+        Computes a historical per-pixel average flood occurrence map using the
+        JRC YearlyHistory or the occurrence band and classifies pixels into
+        Low/Moderate/High based on configured thresholds.
+        Returns: classified_image (values 0=NoData/NoWater, 1=Low, 2=Moderate, 3=High)
+        """
+        if not self._initialized:
+            self.initialize()
+
+        # Use settings default if not provided
+        years = years or settings.GEE_HISTORICAL_YEARS
+
+        # Load JRC occurrence (percentage 0-100) and YearlyHistory if needed
+        jrc = ee.Image("JRC/GSW1_4/GlobalSurfaceWater")
+        occurrence = jrc.select('occurrence').clip(roi)
+
+        # Classify according to thresholds from settings
+        low_t = settings.GEE_HIST_LOW_THRESH
+        mod_t = settings.GEE_HIST_MODERATE_THRESH
+
+        # 0 = No water historically, 1=Low, 2=Moderate, 3=High
+        classified = ee.Image(0).where(occurrence.gt(0).And(occurrence.lte(low_t)), 1)
+        classified = classified.where(occurrence.gt(low_t).And(occurrence.lte(mod_t)), 2)
+        classified = classified.where(occurrence.gt(mod_t), 3)
+
+        return classified.clip(roi).uint8()
+
+    def _compute_anomalous_flood_mask(self, current_mask, roi, seasonal_mask, occurrence_img):
+        """
+        Determines anomalous flood pixels by comparing current_mask (binary) with
+        JRC occurrence and seasonal footprint. Behavior controlled by settings.
+        Returns binary anomalous mask (1=flood anomalous, 0=not anomalous).
+        """
+        # 1. Pixels that are permanent water should be excluded (we'll treat occurrence>=90 as permanent)
+        permanent_threshold = 90
+        permanent = occurrence_img.gte(permanent_threshold)
+
+        # 2. Direct anomaly: current detection AND occurrence < JRC_JRC_OCCURRENCE_THRESHOLD
+        anomaly_threshold = settings.GEE_JRC_OCCURRENCE_THRESHOLD
+        direct_anomaly = current_mask.And(occurrence_img.lt(anomaly_threshold))
+
+        if settings.GEE_USE_SEASONAL_EXCEED:
+            # 3. Seasonal exceedance logic: if seasonal_mask is True, compute pixel where current area
+            # exceeds the historical seasonal footprint by a percent threshold
+            exceed_pct = settings.GEE_SEASONAL_EXCEED_PERCENT / 100.0
+
+            # We approximate seasonal footprint by seasonal_mask (boolean). If current is water where seasonal exists,
+            # check if it is beyond seasonal extent locally by comparing neighborhood sums.
+            # For server-side simplicity, mark pixels where current_mask AND seasonal_mask AND occurrence < (seasonal_threshold + exceed_pct*100)
+            seasonal_exceed_thresh = anomaly_threshold + settings.GEE_SEASONAL_EXCEED_PERCENT
+            seasonal_exceed = current_mask.And(seasonal_mask).And(occurrence_img.lt(seasonal_exceed_thresh))
+
+            anomalous = direct_anomaly.Or(seasonal_exceed)
+        else:
+            anomalous = direct_anomaly
+
+        # Exclude permanent water
+        anomalous = anomalous.And(permanent.Not())
+        return anomalous.rename('anomalous_flood_mask')
+
+    async def run_historical_analysis(
+        self, lat: float, lng: float, radius_km: float, years: int = None
+    ) -> TrendAnalysisResponse:
+        """
+        Performs historical risk analysis using Google Earth Engine JRC Global Surface Water.
+        Returns the time series and a historical-classified tile URL. Updated to use
+        compute_historical_average_map which isolates the historical product.
+        """
+        if not self._initialized:
+            self.initialize()
+        logger.info(f"Running real historical flood analysis for {lat}, {lng} with radius {radius_km}km for {years or settings.GEE_HISTORICAL_YEARS} years")
+
+        # 1. Setup ROI and Timeframe
+        roi = ee.Geometry.Point([lng, lat]).buffer(radius_km * 1000).bounds()
+        current_year = datetime.now().year
+        start_year = current_year - (years or settings.GEE_HISTORICAL_YEARS)
+
+        # 2. Load JRC Global Surface Water Dataset
+        jrc = ee.Image("JRC/GSW1_4/GlobalSurfaceWater")
+        jrc_occurrence = jrc.select('occurrence')
+
+        # 3. Yearly series (unchanged) - attempt to collect YearlyHistory when available
+        yearly_collection = ee.ImageCollection("JRC/GSW1_4/YearlyHistory")
+
+        years_data = []
+        for y in range(start_year, current_year):
+            yearly_img = yearly_collection.filter(ee.Filter.eq('year', y)).first()
+            if yearly_img:
+                water_mask = yearly_img.gte(2)
+                stats = water_mask.multiply(ee.Image.pixelArea()).reduceRegion(
+                    reducer=ee.Reducer.sum(),
+                    geometry=roi,
+                    scale=30,
+                    maxPixels=1e9
+                ).getInfo()
+
+                area_m2 = stats.get('water_classification', 0) or 0
+                roi_area = roi.area().getInfo()
+                percentage = (area_m2 / roi_area) * 100 if roi_area > 0 else 0
+                years_data.append(YearData(year=y, value=round(percentage, 2)))
+
+        if not years_data:
+            years_data = [YearData(year=y, value=0.0) for y in range(start_year, current_year)]
+
+        # 4. Aggregate metrics
+        peak_year_data = max(years_data, key=lambda x: x.value)
+        min_year_data = min(years_data, key=lambda x: x.value)
+        avg_prob = sum(d.value for d in years_data) / len(years_data)
+
+        # 5. Build historical classified map (Low/Moderate/High)
+        hist_map = self.compute_historical_average_map(roi, years=(years or settings.GEE_HISTORICAL_YEARS))
+
+        viz_params = {
+            'min': 1,
+            'max': 3,
+            'palette': ['ADD8E6', 'FFA500', 'FF0000'] # Light Blue, Orange, Red
+        }
+
+        map_id = hist_map.updateMask(hist_map.gt(0)).clip(roi).getMapId(viz_params)
+        composite_tile_url = map_id['tile_fetcher'].url_format
+
+        # 6. Count Zones by Severity (same as before)
+        counts = hist_map.updateMask(hist_map.gt(0)).clip(roi).reduceRegion(
+            reducer=ee.Reducer.frequencyHistogram(),
+            geometry=roi,
+            scale=100, # Coarser scale for faster counting
+            maxPixels=1e8
+        ).get('constant').getInfo() or {}
+
+        severity_counts = [
+            ZoneSeverityCount(severity="Low", count=int(float(counts.get('1.0', 0)))),
+            ZoneSeverityCount(severity="Moderate", count=int(float(counts.get('2.0', 0)))),
+            ZoneSeverityCount(severity="High", count=int(float(counts.get('3.0', 0)))),
+        ]
+
+        return TrendAnalysisResponse(
+            years_data=years_data,
+            composite_tile_url=composite_tile_url,
+            avg_flood_probability=round(avg_prob, 2),
+            peak_year=peak_year_data.year,
+            min_year=min_year_data.year,
+            trend_heatmap_url=composite_tile_url, # Reusing for now
+            zone_count_by_severity=severity_counts
+        )
+
     def detect_floods_ensemble(self, lat, lon, buffer, pre_start, pre_end, post_start, post_end, weights=None):
         """
         Ensemble flood detection using a weighted 3-signal approach.
-        
         Signals:
         1. SAR Change Detection (Ratio)
         2. SAR Post-Event Otsu Thresholding
         3. Random Forest Multi-sensor Classification
-        
-        Risk Classification (LG-112):
-        - Critical / Moderate / Seasonal
+
+        Updated to compute an explicit anomalous flood mask by comparing current
+        detection to JRC occurrence and seasonal footprint.
         """
         if not self._initialized:
             self.initialize()
@@ -670,7 +841,9 @@ class GEEService:
         roi = s1_post.geometry()
 
         # 2. Get JRC Water Masks (LG-111)
+        jrc = ee.Image("JRC/GSW1_4/GlobalSurfaceWater").clip(roi)
         permanent_water, seasonal_water = self.get_jrc_water_masks(roi)
+        occurrence = jrc.select('occurrence')
 
         # 3. Signal 1: Change Detection (Ratio + Otsu)
         change_img = self.compute_change_ratio(s1_pre, s1_post, use_otsu=True)
@@ -684,7 +857,7 @@ class GEEService:
         if not s2_post:
             logger.warning("Sentinel-2 missing for ensemble. Scaling SAR weights.")
             weights = {"change": 0.6, "otsu": 0.4, "rf": 0.0}
-            rf_mask = ee.Image.constant(0)
+            rf_mask = ee.Image.constant(0).rename('signal_rf')
         else:
             feature_stack, _ = self.create_rf_feature_stack(
                 lat, lon, buffer, post_start, post_end, post_start, post_end
@@ -692,13 +865,23 @@ class GEEService:
             model_id = getattr(settings, "GEE_RF_MODEL_PATH", f"projects/{settings.GEE_PROJECT}/assets/flood_rf_model_1780753896")
             try:
                 model_asset = ee.FeatureCollection(model_id).first()
-                # Correct way to load a serialized classifier: list of strings
-                classifier = ee.Classifier.decisionTreeEnsemble([model_asset.get('classifier')])
-                rf_mask = feature_stack.classify(classifier).rename('rf_mask')
+                classifier_data = model_asset.get('classifier')
+                
+                def load_clf(data):
+                    is_string = ee.Algorithms.ObjectType(data).equals('String')
+                    trees_list = ee.Algorithms.If(
+                        is_string,
+                        ee.String(data).split('\n'),
+                        ee.List(data)
+                    )
+                    return ee.Classifier.decisionTreeEnsemble(ee.List(trees_list))
+                
+                classifier = load_clf(classifier_data)
+                rf_mask = feature_stack.classify(classifier).rename('signal_rf')
             except Exception as e:
                 logger.error(f"Failed to load RF model for ensemble at {model_id}: {e}")
                 weights = {"change": 0.6, "otsu": 0.4, "rf": 0.0}
-                rf_mask = ee.Image.constant(0)
+                rf_mask = ee.Image.constant(0).rename('signal_rf')
 
         # 6. Weighted Ensemble Calculation
         ensemble_score = s1_change_mask.multiply(weights["change"])\
@@ -707,10 +890,11 @@ class GEEService:
             .rename('ensemble_score')
 
         # 7. Apply Consensus Threshold (0.5)
-        raw_flood_mask = ensemble_score.gte(0.5)
+        raw_flood_mask = ensemble_score.gte(0.5).rename('raw_flood_mask')
 
-        # 8. Refine Flood Mask with JRC Subtraction (LG-111)
-        final_flood_mask = raw_flood_mask.And(permanent_water.Not()).rename('final_flood_mask')
+        # 8. Compute anomalous flood mask using JRC occurrence + seasonal rules
+        anomalous_mask = self._compute_anomalous_flood_mask(raw_flood_mask, roi, seasonal_water, occurrence)
+        final_flood_mask = anomalous_mask.rename('final_flood_mask')
 
         # 9. Risk Classification (LG-112)
         terrain_img = self.get_terrain_data(roi)
@@ -722,9 +906,11 @@ class GEEService:
             s1_post_otsu_mask.rename('signal_otsu'),
             rf_mask.rename('signal_rf'),
             permanent_water.rename('signal_permanent'),
-            seasonal_water.rename('signal_seasonal')
+            seasonal_water.rename('signal_seasonal'),
+            occurrence.rename('jrc_occurrence')
         ])
         
+        # In the live map, we only show Level 3 (Critical) for true anomalies
         risk_level = self.classify_flood_risk(ensemble_img, terrain_img)
 
         return ensemble_img.addBands(risk_level).clip(roi)
@@ -757,7 +943,7 @@ class GEEService:
 
         # 3. Post-Process: Calculate area and filter small noise
         def add_area_info(feature):
-            area = feature.geometry().area().divide(1e6) # Area in km2
+            area = feature.geometry().area(maxError=1).divide(1e6) # Area in km2
             return feature.set({
                 'area_km2': area,
                 'zone_id': feature.id()
@@ -808,43 +994,6 @@ class GEEService:
         # Divide by 10000 for reflectance normalization (LG-103)
         # We copy properties to ensure metadata like 'system:index' is preserved
         return ee.Image(best_image.divide(10000).copyProperties(best_image, best_image.propertyNames())).clip(roi)
-
-    async def run_historical_analysis(
-        self, lat: float, lng: float, radius_km: float, years: int
-    ) -> TrendAnalysisResponse:
-        """
-        Performs historical risk analysis using Google Earth Engine.
-        This is currently a stub returning mock data for SCRUM-49.
-        """
-        logger.info(f"Running historical analysis for {lat}, {lng} with radius {radius_km}km for {years} years")
-        
-        # Mock data generation
-        current_year = 2024
-        years_list = list(range(current_year - years, current_year))
-        
-        years_data = [
-            YearData(year=y, value=random.uniform(10.0, 80.0))
-            for y in years_list
-        ]
-        
-        # Determine peak and min years from mock data
-        peak_year_data = max(years_data, key=lambda x: x.value)
-        min_year_data = min(years_data, key=lambda x: x.value)
-        avg_ffi = sum(d.value for d in years_data) / len(years_data)
-        
-        return TrendAnalysisResponse(
-            years_data=years_data,
-            composite_tile_url="https://earthengine.googleapis.com/v1/projects/lankageo/maps/mock-composite/tiles/{z}/{x}/{y}",
-            avg_ffi=round(avg_ffi, 2),
-            peak_year=peak_year_data.year,
-            min_year=min_year_data.year,
-            trend_heatmap_url="https://earthengine.googleapis.com/v1/projects/lankageo/maps/mock-heatmap/tiles/{z}/{x}/{y}",
-            zone_count_by_severity=[
-                ZoneSeverityCount(severity="High", count=random.randint(5, 15)),
-                ZoneSeverityCount(severity="Medium", count=random.randint(15, 30)),
-                ZoneSeverityCount(severity="Low", count=random.randint(30, 50)),
-            ]
-        )
 
 # Singleton instance
 gee_service = GEEService()

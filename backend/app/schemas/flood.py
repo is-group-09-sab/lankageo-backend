@@ -6,7 +6,7 @@ class FloodAnalysisRequest(BaseModel):
     lat: float = Field(..., ge=5.72, le=9.85, description="Latitude of the center of the ROI (Sri Lanka bounds)")
     lng: float = Field(..., ge=79.52, le=81.88, description="Longitude of the center of the ROI (Sri Lanka bounds)")
     radius_km: int = Field(..., ge=1, le=50, description="Radius for the analysis buffer (1km - 50km)")
-    override_date: Optional[str] = Field(None, description="Optional date (YYYY-MM-DD) to simulate a historical flood as live.")
+    override_date: Optional[str] = Field(None, description="ISO date string to simulate historical analysis (YYYY-MM-DD)")
 
 class FloodAnalysisResponse(BaseModel):
     tile_url: str
