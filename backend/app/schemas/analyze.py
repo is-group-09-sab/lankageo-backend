@@ -19,9 +19,9 @@ class ZoneSeverityCount(BaseModel):
 class TrendAnalysisResponse(BaseModel):
     years_data: List[YearData] = Field(..., description="Historical data trend over the specified years")
     composite_tile_url: str = Field(..., description="URL for the composite risk tile layer")
-    avg_ffi: float = Field(..., description="Average Forest Fire Index (FFI) over the period")
-    peak_year: int = Field(..., description="Year with the highest recorded risk")
-    min_year: int = Field(..., description="Year with the lowest recorded risk")
+    avg_flood_probability: float = Field(..., description="Average flood probability over the period (%)")
+    peak_year: int = Field(..., description="Year with the highest recorded flood extent")
+    min_year: int = Field(..., description="Year with the lowest recorded flood extent")
     trend_heatmap_url: str = Field(..., description="URL for the historical trend heatmap")
     zone_count_by_severity: List[ZoneSeverityCount] = Field(..., description="Count of zones categorized by risk severity")
 
@@ -38,7 +38,7 @@ class HistoricalRiskProfileRecord(BaseModel):
     """Schema for persisting the Historical_Risk_Profile record"""
     id: Optional[str] = None
     request_id: str
-    avg_ffi: float
+    avg_flood_probability: float
     peak_year: int
     min_year: int
     data_payload: Dict[str, Any]

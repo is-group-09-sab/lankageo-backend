@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, Depends, status
-from typing import Any
+from typing import Any, List, Dict
 from app.schemas.flood import FloodAnalysisRequest, FloodAnalysisResponse
 from app.schemas.analyze import TrendAnalysisRequest, TrendAnalysisResponse
 from app.services.flood_service import flood_service
@@ -12,6 +12,21 @@ import logging
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+@router.get("/live", response_model=List[Dict[str, Any]])
+async def get_live_polygons():
+    """
+    Fetch all previously stored live flood polygons from the database.
+    This is a public endpoint used by the dashboard to show current flood status.
+    """
+    try:
+        return await flood_service.get_all_live_polygons()
+    except Exception as e:
+        logger.error(f"Error fetching live polygons: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"An error occurred while fetching polygons: {str(e)}"
+        )
 
 @router.post("/live", response_model=FloodAnalysisResponse)
 async def analyze_live_flood(
@@ -92,7 +107,7 @@ async def analyze_trend(
         # Create child Historical_Risk_Profile record linked to the parent Request
         profile_record = {
             "request_id": request_id,
-            "avg_ffi": analysis_result.avg_ffi,
+            "avg_flood_probability": analysis_result.avg_flood_probability,
             "peak_year": analysis_result.peak_year,
             "min_year": analysis_result.min_year,
             "data_payload": analysis_result.model_dump()

@@ -22,7 +22,20 @@ class Settings(BaseSettings):
     GEE_REFRESH_TOKEN: Optional[str] = None
     
     GEE_PROJECT: Optional[str] = "lanka-geo"
-    
+
+    # GEE behavior and thresholds (configurable)
+    # Number of years to consider for historical aggregation
+    GEE_HISTORICAL_YEARS: int = 5
+    # Historical classification thresholds (percent occurrence)
+    GEE_HIST_LOW_THRESH: int = 10      # >0 and <=10 => Low
+    GEE_HIST_MODERATE_THRESH: int = 40 # >10 and <=40 => Moderate
+    # JRC occurrence threshold (percent) below which a current detection is considered anomalous
+    GEE_JRC_OCCURRENCE_THRESHOLD: int = 20
+    # If seasonal water exists, allow detection to exceed seasonal footprint by this fraction (percent)
+    GEE_SEASONAL_EXCEED_PERCENT: int = 20
+    # Toggle using seasonal exceedance logic when deciding anomalies
+    GEE_USE_SEASONAL_EXCEED: bool = True
+
     # Google Maps Platform Settings
     GOOGLE_MAPS_JS_API_KEY: Optional[str] = None
     GOOGLE_PLACES_API_KEY: Optional[str] = None
