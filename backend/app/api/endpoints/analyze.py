@@ -28,6 +28,21 @@ async def get_live_polygons():
             detail=f"An error occurred while fetching polygons: {str(e)}"
         )
 
+@router.get("/polygons/year/{year}", response_model=List[Dict[str, Any]])
+async def get_polygons_by_year(year: int):
+    """
+    Fetch all stored flood polygons for a specific year from the database.
+    Used by the historical risk view to display year-specific polygons.
+    """
+    try:
+        return await flood_service.get_polygons_by_year(year)
+    except Exception as e:
+        logger.error(f"Error fetching polygons for year {year}: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"An error occurred while fetching polygons for year {year}: {str(e)}"
+        )
+
 @router.post("/live", response_model=FloodAnalysisResponse)
 async def analyze_live_flood(
     request: FloodAnalysisRequest,

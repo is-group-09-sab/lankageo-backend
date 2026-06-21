@@ -105,8 +105,8 @@ def train_rf():
     print(f"Split data: Train={train_set.size().getInfo()}, Test={test_set.size().getInfo()}")
 
     # 4. Train Classifier
-    print(f"Training smileRandomForest(100) on {required_features}...")
-    classifier = gee_service.train_rf_classifier(train_set, required_features, label_property=label_col)
+    print(f"Training smileRandomForest(10) on {required_features}...")
+    classifier = gee_service.train_rf_classifier(train_set, required_features, label_property=label_col, num_trees=10)
     
     # 5. Validate
     print("Validating model...")
@@ -122,13 +122,18 @@ def train_rf():
         asset_id = f"projects/{settings.GEE_PROJECT}/assets/{model_name}"
         
         print(f"Exporting model to: {asset_id}...")
-        # Use dummy point geometry and attach classifier properties directly
+        # Use dummy point geometry and attach classifier trees directly
         dummy_geom = ee.Geometry.Point([0, 0])
-        # Extract model configuration as a dictionary
-        model_props = classifier.explain()
-        # Export as a FeatureCollection where the first feature contains the classifier model
+        # Extract the decision trees (List of strings) - This is the standard format
+        model_explanation = classifier.explain().getInfo()
+        trees = model_explanation.get('trees', [])
+        
+        # Join into a single string because GEE cannot export List<String> to assets
+        trees_string = '\n'.join(trees)
+        
+        # Export as a FeatureCollection where the first feature contains the trees string
         task = ee.batch.Export.table.toAsset(
-            collection=ee.FeatureCollection([ee.Feature(dummy_geom, model_props)]),
+            collection=ee.FeatureCollection([ee.Feature(dummy_geom, {'classifier': trees_string})]),
             description=f"Export_{model_name}",
             assetId=asset_id
         )

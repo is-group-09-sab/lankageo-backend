@@ -381,21 +381,25 @@ class GEEService:
 
     def get_terrain_data(self, roi):
         """
-        Loads SRTM Elevation and HAND (Height Above Nearest Drainage) data.
-        Resamples to 10m resolution to match Sentinel data.
+        [RELIABILITY PROTOCOL LAYER 2] 
+        Loads SRTM Elevation, Slope, and MERIT Hydro HAND/Drainage data.
+        Resamples to 10m resolution for high-precision masking.
         """
-        # 1. Load SRTM Elevation (30m)
-        elevation = ee.Image("USGS/SRTMGL1_003").select('elevation').rename('elevation')
+        # 1. Load SRTM Elevation and calculate Slope
+        dem = ee.Image("USGS/SRTMGL1_003")
+        elevation = dem.select('elevation').rename('elevation')
+        slope = ee.Terrain.slope(elevation).rename('slope')
         
-        # 2. Load Global HAND (Height Above Nearest Drainage)
-        # We use MERIT Hydro as it is a high-quality, accessible global dataset
-        hand = ee.Image("MERIT/Hydro/v1_0_1").select('hnd').rename('HAND')
+        # 2. Load MERIT Hydro for HAND and Drainage Area (Accumulation)
+        # Upstream Drainage Area (upa) is used to identify river corridors
+        merit = ee.Image("MERIT/Hydro/v1_0_1")
+        hand = merit.select('hnd').rename('HAND')
+        drainage_area = merit.select('upa').rename('drainage_area')
         
         # Combine and clip
-        terrain = ee.Image.cat([elevation, hand]).clip(roi)
+        terrain = ee.Image.cat([elevation, slope, hand, drainage_area]).clip(roi)
         
         # 3. Resample to 10m using bilinear interpolation
-        # This ensures the terrain features align with the 10m satellite pixels
         return terrain.resample('bilinear')
 
     def create_rf_feature_stack(self, lat, lon, buffer, s1_start, s1_end, s2_start, s2_end, orbit_pass="DESCENDING"):
@@ -537,34 +541,33 @@ class GEEService:
 
     def classify_flood_risk(self, ensemble_img, terrain_img):
         """
-        Classifies flood risk into three levels:
-        1. Seasonal (Level 1) - Based on JRC historical data
-        2. Moderate (Level 2) - Any signal OR HAND 2-20m
-        3. Critical (Level 3) - Ensemble Consensus AND HAND < 2m
+        [RELIABILITY PROTOCOL LAYER 3] Strictly Detection-Driven Risk
+        Only colors pixels where water was actually detected.
         """
         # 1. Extract bands
-        ensemble_score = ensemble_img.select('ensemble_score')
         final_flood_mask = ensemble_img.select('final_flood_mask')
+        reliable_detection = ensemble_img.select('reliable_detection')
         seasonal_water = ensemble_img.select('signal_seasonal')
+        permanent_water = ensemble_img.select('signal_permanent')
         hand = terrain_img.select('HAND')
         
         # 2. Initialize risk image (0 = No Risk)
         risk = ee.Image.constant(0).rename('risk_level')
         
         # 3. Apply hierarchy (Low level to High level)
-        # Level 1: Seasonal
-        risk = risk.where(seasonal_water.eq(1), 1)
+        # Level 1: Seasonal (Detected water AND known historical seasonal water AND NOT permanent water)
+        seasonal_mask = reliable_detection.eq(1).And(seasonal_water.eq(1)).And(permanent_water.Not())
+        risk = risk.where(seasonal_mask, 1)
         
-        # Level 2: Moderate (Signal detected OR low-lying terrain)
-        moderate_mask = ensemble_score.gt(0).Or(hand.gt(2).And(hand.lt(20)))
+        # Level 2: Moderate (Detected flood AND HAND >= 2m)
+        moderate_mask = final_flood_mask.eq(1).And(hand.gte(2))
         risk = risk.where(moderate_mask, 2)
         
-        # Level 3: Critical (Strong detection AND very low terrain)
+        # Level 3: Critical (Detected flood AND HAND < 2m)
         critical_mask = final_flood_mask.eq(1).And(hand.lt(2))
         risk = risk.where(critical_mask, 3)
         
         # Ensure permanent water bodies don't show risk
-        permanent_water = ensemble_img.select('signal_permanent')
         risk = risk.where(permanent_water.eq(1), 0)
         
         return risk.uint8()
@@ -733,68 +736,97 @@ class GEEService:
         self, lat: float, lng: float, radius_km: float, years: int = None
     ) -> TrendAnalysisResponse:
         """
-        Performs historical risk analysis using Google Earth Engine JRC Global Surface Water.
-        Returns the time series and a historical-classified tile URL. Updated to use
-        compute_historical_average_map which isolates the historical product.
+        [LONGITUDINAL PROTOCOL] 5-Year Daily Residency Average.
+        Calculates how many days a pixel was water vs observed, averaged over 5 years.
+        Provides a high-fidelity longitudinal risk assessment.
         """
         if not self._initialized:
             self.initialize()
-        logger.info(f"Running real historical flood analysis for {lat}, {lng} with radius {radius_km}km for {years or settings.GEE_HISTORICAL_YEARS} years")
+        
+        logger.info(f"Running Longitudinal Historical Analysis for {lat}, {lng} ({radius_km}km)")
 
         # 1. Setup ROI and Timeframe
         roi = ee.Geometry.Point([lng, lat]).buffer(radius_km * 1000).bounds()
         current_year = datetime.now().year
-        start_year = current_year - (years or settings.GEE_HISTORICAL_YEARS)
+        num_years = years or settings.GEE_HISTORICAL_YEARS
+        start_year = current_year - num_years
 
-        # 2. Load JRC Global Surface Water Dataset
-        jrc = ee.Image("JRC/GSW1_4/GlobalSurfaceWater")
-        jrc_occurrence = jrc.select('occurrence')
-
-        # 3. Yearly series (unchanged) - attempt to collect YearlyHistory when available
-        yearly_collection = ee.ImageCollection("JRC/GSW1_4/YearlyHistory")
-
+        # 2. Iterate through each year to calculate Annual Residency
+        yearly_residency_images = []
         years_data = []
+
         for y in range(start_year, current_year):
-            yearly_img = yearly_collection.filter(ee.Filter.eq('year', y)).first()
-            if yearly_img:
-                water_mask = yearly_img.gte(2)
-                stats = water_mask.multiply(ee.Image.pixelArea()).reduceRegion(
-                    reducer=ee.Reducer.sum(),
-                    geometry=roi,
-                    scale=30,
-                    maxPixels=1e9
-                ).getInfo()
+            # Query full Sentinel-1 collection for the year
+            s1_year = ee.ImageCollection('COPERNICUS/S1_GRD')\
+                .filterBounds(roi)\
+                .filterDate(f'{y}-01-01', f'{y}-12-31')\
+                .filter(ee.Filter.eq('instrumentMode', 'IW'))\
+                .select('VV')
+            
+            # Count observations
+            total_observations = s1_year.count()
+            
+            # Count water detections (Using a robust -16dB threshold for high-frequency SAR)
+            def compute_daily_water(img):
+                return img.lt(-16).rename('water_mask')
+            
+            water_count = s1_year.map(compute_daily_water).sum()
+            
+            # residency = (Days detected as water) / (Total days observed)
+            # We use 0.001 to avoid division by zero
+            residency = water_count.divide(total_observations.add(0.001)).rename('residency')
+            yearly_residency_images.append(residency)
+            
+            # Calculate average probability for this year for the trend chart
+            # We reduceRegion to get the mean residency across the ROI
+            annual_stats = residency.reduceRegion(
+                reducer=ee.Reducer.mean(),
+                geometry=roi,
+                scale=100, # Fast reduction for trend data
+                maxPixels=1e9
+            ).getInfo()
+            
+            annual_prob = (annual_stats.get('residency', 0) or 0) * 100
+            years_data.append(YearData(year=y, value=round(annual_prob, 2)))
 
-                area_m2 = stats.get('water_classification', 0) or 0
-                roi_area = roi.area().getInfo()
-                percentage = (area_m2 / roi_area) * 100 if roi_area > 0 else 0
-                years_data.append(YearData(year=y, value=round(percentage, 2)))
-
-        if not years_data:
-            years_data = [YearData(year=y, value=0.0) for y in range(start_year, current_year)]
-
-        # 4. Aggregate metrics
-        peak_year_data = max(years_data, key=lambda x: x.value)
-        min_year_data = min(years_data, key=lambda x: x.value)
-        avg_prob = sum(d.value for d in years_data) / len(years_data)
-
-        # 5. Build historical classified map (Low/Moderate/High)
-        hist_map = self.compute_historical_average_map(roi, years=(years or settings.GEE_HISTORICAL_YEARS))
-
+        # 3. 5-Year Mean Longitudinal Probability Index
+        # This is the "average residency" across the entire 5-year period
+        longitudinal_index = ee.ImageCollection(yearly_residency_images).mean().rename('flood_probability')
+        
+        # 4. Generate Visualization and Stats
+        # Scale 0 to 0.5 (representing 0% to 50% residency as the max probability)
         viz_params = {
-            'min': 1,
-            'max': 3,
-            'palette': ['ADD8E6', 'FFA500', 'FF0000'] # Light Blue, Orange, Red
+            'min': 0,
+            'max': 0.5,
+            'palette': ['ffffff', '3498db', 'e74c3c'] # White (None) to Blue to Red
         }
-
-        map_id = hist_map.updateMask(hist_map.gt(0)).clip(roi).getMapId(viz_params)
+        
+        map_id = longitudinal_index.getMapId(viz_params)
         composite_tile_url = map_id['tile_fetcher'].url_format
 
-        # 6. Count Zones by Severity (same as before)
-        counts = hist_map.updateMask(hist_map.gt(0)).clip(roi).reduceRegion(
+        # Calculate global aggregate metrics
+        global_stats = longitudinal_index.reduceRegion(
+            reducer=ee.Reducer.mean(),
+            geometry=roi,
+            scale=30,
+            maxPixels=1e9
+        ).getInfo()
+        
+        avg_prob = (global_stats.get('flood_probability', 0) or 0) * 100
+        peak_year_data = max(years_data, key=lambda x: x.value)
+        min_year_data = min(years_data, key=lambda x: x.value)
+
+        # 5. Zone Severity Breakdown (Based on FFI thresholds)
+        # Low: < 5% residency, Moderate: 5-20%, High: > 20%
+        classified = ee.Image(0)\
+            .where(longitudinal_index.gt(0).And(longitudinal_index.lte(0.05)), 1)\
+            .where(longitudinal_index.gt(0.05).And(longitudinal_index.lte(0.20)), 2)\
+            .where(longitudinal_index.gt(0.20), 3)
+            
+        counts = classified.reduceRegion(
             reducer=ee.Reducer.frequencyHistogram(),
             geometry=roi,
-            scale=100, # Coarser scale for faster counting
+            scale=100,
             maxPixels=1e8
         ).get('constant').getInfo() or {}
 
@@ -810,20 +842,30 @@ class GEEService:
             avg_flood_probability=round(avg_prob, 2),
             peak_year=peak_year_data.year,
             min_year=min_year_data.year,
-            trend_heatmap_url=composite_tile_url, # Reusing for now
+            trend_heatmap_url=composite_tile_url,
             zone_count_by_severity=severity_counts
         )
 
+    def _apply_morphological_cleaning(self, mask_img, radius=1.5):
+        """
+        Removes salt-and-pepper noise from a binary mask using morphological operations.
+        Actually uses focal_mode which is effective for cleaning up classification masks.
+        """
+        return mask_img.focal_mode(radius=radius, kernelType='square', units='pixels')
+
+    def _get_urban_mask(self, roi):
+        """
+        Retrieves an urban area mask using ESA WorldCover v200.
+        ESA Class 50 is 'Built-up'.
+        """
+        worldcover = ee.ImageCollection("ESA/WorldCover/v200").first().clip(roi)
+        urban = worldcover.eq(50).rename('urban_mask')
+        return urban
+
     def detect_floods_ensemble(self, lat, lon, buffer, pre_start, pre_end, post_start, post_end, weights=None):
         """
-        Ensemble flood detection using a weighted 3-signal approach.
-        Signals:
-        1. SAR Change Detection (Ratio)
-        2. SAR Post-Event Otsu Thresholding
-        3. Random Forest Multi-sensor Classification
-
-        Updated to compute an explicit anomalous flood mask by comparing current
-        detection to JRC occurrence and seasonal footprint.
+        Ensemble flood detection with Unified Reliability Protocol.
+        Includes: Morphological Cleaning, Urban Masking, Slope Suppression, and Hydrological Connectivity.
         """
         if not self._initialized:
             self.initialize()
@@ -839,6 +881,7 @@ class GEEService:
             raise ValueError("Required Sentinel-1 imagery missing for ensemble.")
             
         roi = s1_post.geometry()
+        terrain_img = self.get_terrain_data(roi)
 
         # 2. Get JRC Water Masks (LG-111)
         jrc = ee.Image("JRC/GSW1_4/GlobalSurfaceWater").clip(roi)
@@ -892,25 +935,54 @@ class GEEService:
         # 7. Apply Consensus Threshold (0.5)
         raw_flood_mask = ensemble_score.gte(0.5).rename('raw_flood_mask')
 
-        # 8. Compute anomalous flood mask using JRC occurrence + seasonal rules
-        anomalous_mask = self._compute_anomalous_flood_mask(raw_flood_mask, roi, seasonal_water, occurrence)
-        final_flood_mask = anomalous_mask.rename('final_flood_mask')
+        # 8. [PROTOCOL] Reliability Filtering
+        # A. Morphological Cleaning
+        cleaned_flood_mask = self._apply_morphological_cleaning(raw_flood_mask)
 
-        # 9. Risk Classification (LG-112)
-        terrain_img = self.get_terrain_data(roi)
+        # B. Slope Suppression (Layer 2)
+        slope = terrain_img.select('slope')
+        slope_mask = slope.lt(5) # Keep pixels where slope < 5 degrees
         
+        # C. Hydrological Connectivity (Layer 1)
+        # Identify major drainage lines (rivers/canals): Upstream Drainage Area > 10 km2 (upa is in km2)
+        major_drainage = terrain_img.select('drainage_area').gt(10)
+        # Reproject to EPSG:4326 at 10m scale to ensure pixel-to-meter distance calculations are invariant to zoom/resolution scale
+        major_drainage_10m = major_drainage.reproject(crs='EPSG:4326', scale=10)
+        # Calculate distance to nearest major drainage line (max search 300 pixels = 3km at 10m scale)
+        distance_sq = major_drainage_10m.fastDistanceTransform(300, 'pixels', 'squared_euclidean')
+        distance_meters = distance_sq.sqrt().multiply(10)
+        # Define the river corridor (within 3km)
+        river_corridor = distance_meters.lte(3000)
+        # If not in corridor, require higher consensus (>0.8) to reduce false positives
+        connectivity_mask = river_corridor.Or(ensemble_score.gt(0.8))
+
+        # D. Urban Area Masking
+        urban_mask = self._get_urban_mask(roi)
+        # Filter shadows unless very high score
+        urban_filtered_mask = cleaned_flood_mask.And(urban_mask.Not().Or(ensemble_score.gt(0.8)))
+
+        # 9. Final Reliability Assembly
+        reliable_mask = urban_filtered_mask.And(slope_mask).And(connectivity_mask)
+
+        # 10. Compute anomalous flood mask using JRC occurrence + seasonal rules
+        anomalous_mask = self._compute_anomalous_flood_mask(reliable_mask, roi, seasonal_water, occurrence)
+        # [CRITICAL] Ensure permanent water (Beira Lake/Harbor) is NEVER in the final mask
+        final_flood_mask = anomalous_mask.And(permanent_water.Not()).rename('final_flood_mask')
+
+        # 11. Risk Classification (LG-112)
         ensemble_img = ee.Image.cat([
             ensemble_score, 
             final_flood_mask, 
+            reliable_mask.rename('reliable_detection'),
             s1_change_mask.rename('signal_change'),
             s1_post_otsu_mask.rename('signal_otsu'),
             rf_mask.rename('signal_rf'),
             permanent_water.rename('signal_permanent'),
             seasonal_water.rename('signal_seasonal'),
-            occurrence.rename('jrc_occurrence')
+            occurrence.rename('jrc_occurrence'),
+            urban_mask
         ])
         
-        # In the live map, we only show Level 3 (Critical) for true anomalies
         risk_level = self.classify_flood_risk(ensemble_img, terrain_img)
 
         return ensemble_img.addBands(risk_level).clip(roi)

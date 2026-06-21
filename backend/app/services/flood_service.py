@@ -51,16 +51,23 @@ class FloodService:
     async def get_all_live_polygons(self) -> List[Dict[str, Any]]:
         """
         Fetches all stored flood polygons from the database and formats them as GeoJSON Features.
+        Filters out polygons from yearly average aggregate analyses.
         """
         try:
-            # Fetch polygons from the flood_polygons table
-            response = self.supabase.table("flood_polygons").select("*").execute()
+            # Fetch polygons from the flood_polygons table, joining parent live_flood_results
+            response = self.supabase.table("flood_polygons") \
+                .select("*, live_flood_results!inner(gee_asset_id)") \
+                .execute()
             
             if not response.data:
                 return []
                 
             features = []
             for item in response.data:
+                gee_asset_id = item.get("live_flood_results", {}).get("gee_asset_id") or ""
+                # Filter out yearly average polygons from the live map
+                if gee_asset_id.startswith("yearly_average"):
+                    continue
                 features.append({
                     "type": "Feature",
                     "geometry": item.get("geom"),
@@ -75,6 +82,39 @@ class FloodService:
 
         except Exception as e:
             print(f"Error fetching polygons: {e}")
+            return []
+
+    async def get_polygons_by_year(self, year: int) -> List[Dict[str, Any]]:
+        """
+        Fetches stored flood polygons for a specific historical year (using gee_asset_id prefix).
+        """
+        try:
+            # Query polygons joined with live_flood_results
+            response = self.supabase.table("flood_polygons") \
+                .select("*, live_flood_results!inner(gee_asset_id)") \
+                .execute()
+            
+            if not response.data:
+                return []
+                
+            features = []
+            for item in response.data:
+                gee_asset_id = item.get("live_flood_results", {}).get("gee_asset_id") or ""
+                # Match e.g. "yearly_average_2020"
+                if f"yearly_average_{year}" in gee_asset_id:
+                    features.append({
+                        "type": "Feature",
+                        "geometry": item.get("geom"),
+                        "properties": {
+                            "severity_level": item.get("severity_level"),
+                            "area_km2": item.get("area_km2"),
+                            "water_type": item.get("water_type"),
+                            "result_id": item.get("result_id")
+                        }
+                    })
+            return features
+        except Exception as e:
+            print(f"Error fetching polygons for year {year}: {e}")
             return []
 
     async def process_flood_analysis(self, request: FloodAnalysisRequest) -> Dict[str, Any]:
