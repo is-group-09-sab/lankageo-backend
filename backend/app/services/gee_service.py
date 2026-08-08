@@ -764,11 +764,11 @@ class GEEService:
                 .select('VV')
             
             # Count observations
-            total_observations = s1_year.count()
+            total_observations = s1_year.count().clip(roi)
             
             # Count water detections (Using a robust -16dB threshold for high-frequency SAR)
             def compute_daily_water(img):
-                return img.lt(-16).rename('water_mask')
+                return img.clip(roi).lt(-16).rename('water_mask')
             
             water_count = s1_year.map(compute_daily_water).sum()
             
@@ -782,7 +782,8 @@ class GEEService:
             annual_stats = residency.reduceRegion(
                 reducer=ee.Reducer.mean(),
                 geometry=roi,
-                scale=100, # Fast reduction for trend data
+                scale=200, # Fast, memory-efficient reduction for trend data
+                tileScale=4,
                 maxPixels=1e9
             ).getInfo()
             
@@ -808,7 +809,8 @@ class GEEService:
         global_stats = longitudinal_index.reduceRegion(
             reducer=ee.Reducer.mean(),
             geometry=roi,
-            scale=30,
+            scale=200,
+            tileScale=4,
             maxPixels=1e9
         ).getInfo()
         
@@ -826,7 +828,8 @@ class GEEService:
         counts = classified.reduceRegion(
             reducer=ee.Reducer.frequencyHistogram(),
             geometry=roi,
-            scale=100,
+            scale=200,
+            tileScale=4,
             maxPixels=1e8
         ).get('constant').getInfo() or {}
 

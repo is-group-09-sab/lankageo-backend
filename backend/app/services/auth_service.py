@@ -2,6 +2,7 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from supabase import create_client, Client
 from app.core.config import settings
+from typing import Optional
 
 # OAuth2 scheme for token extraction
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
@@ -24,6 +25,17 @@ def get_supabase() -> Client:
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Supabase client could not be initialized: {str(e)}"
             )
+    return _supabase
+
+def get_supabase_optional() -> Optional[Client]:
+    global _supabase
+    if _supabase is None:
+        if not settings.SUPABASE_URL or not settings.SUPABASE_KEY:
+            return None
+        try:
+            _supabase = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
+        except Exception:
+            return None
     return _supabase
 
 async def get_current_user(token: str = Depends(oauth2_scheme)):
@@ -59,4 +71,23 @@ def check_admin_role(user: any):
             status_code=status.HTTP_403_FORBIDDEN,
             detail="The user does not have sufficient permissions",
         )
-    return True
+
+
+oauth2_scheme_optional = OAuth2PasswordBearer(tokenUrl="token", auto_error=False)
+
+
+async def get_current_user_optional(token: Optional[str] = Depends(oauth2_scheme_optional)) -> Optional[any]:
+    """
+    Dependency to verify the Supabase JWT and return the user object if present.
+    Does not raise an error if the user is unauthenticated.
+    """
+    if not token:
+        return None
+    supabase = get_supabase()
+    try:
+        user_response = supabase.auth.get_user(token)
+        if user_response and user_response.user:
+            return user_response.user
+    except Exception:
+        pass
+    return None

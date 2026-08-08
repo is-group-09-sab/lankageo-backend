@@ -1,0 +1,274 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="AutoImportSettings">
+    <option name="autoReloadType" value="SELECTIVE" />
+  </component>
+  <component name="ChangeListManager">
+    <list default="true" id="8fcbefe7-27f2-4c20-963b-4d1076493deb" name="Changes" comment="historical analysis error fix.">
+      <change beforePath="$PROJECT_DIR$/backend/.env.example" beforeDir="false" afterPath="$PROJECT_DIR$/backend/.env.example" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/app/api/endpoints/analyze.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/app/api/endpoints/analyze.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/app/schemas/analyze.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/app/schemas/analyze.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/app/services/auth_service.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/app/services/auth_service.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/app/services/gee_service.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/app/services/gee_service.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/app/services/report_service.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/app/services/report_service.py" afterDir="false" />
+    </list>
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="CopilotPersistence">
+    <persistenceIdMap>
+      <entry key="_/Users/imanperera/Desktop/Lanka_geo/lankageo-backend" value="3D22h99Rtl71Yj26KyJWaKXw5dO" />
+    </persistenceIdMap>
+  </component>
+  <component name="FileTemplateManagerImpl">
+    <option name="RECENT_TEMPLATES">
+      <list>
+        <option value="Python Script" />
+      </list>
+    </option>
+  </component>
+  <component name="Git.Rebase.Settings">
+    <option name="NEW_BASE" value="main" />
+  </component>
+  <component name="Git.Settings">
+    <option name="RECENT_BRANCH_BY_REPOSITORY">
+      <map>
+        <entry key="$PROJECT_DIR$/.." value="main" />
+      </map>
+    </option>
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+    <option name="ROOT_SYNC" value="DONT_SYNC" />
+  </component>
+  <component name="ProjectColorInfo">{
+  &quot;associatedIndex&quot;: 5
+}</component>
+  <component name="ProjectId" id="3D22h99Rtl71Yj26KyJWaKXw5dO" />
+  <component name="ProjectViewState">
+    <option name="autoscrollToSource" value="true" />
+    <option name="hideEmptyMiddlePackages" value="true" />
+    <option name="showLibraryContents" value="true" />
+  </component>
+  <component name="PropertiesComponent">{
+  &quot;keyToString&quot;: {
+    &quot;Python.test.executor&quot;: &quot;Run&quot;,
+    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
+    &quot;git-widget-placeholder&quot;: &quot;iman&quot;,
+    &quot;last_opened_file_path&quot;: &quot;/Users/imanperera/Desktop/Lanka_geo/lankageo-backend&quot;,
+    &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
+    &quot;node.js.detected.package.tslint&quot;: &quot;true&quot;,
+    &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,
+    &quot;node.js.selected.package.tslint&quot;: &quot;(autodetect)&quot;,
+    &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
+    &quot;settings.editor.selected.configurable&quot;: &quot;preferences.pluginManager&quot;,
+    &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
+  }
+}</component>
+  <component name="SharedIndexes">
+    <attachedChunks>
+      <set>
+        <option value="bundled-js-predefined-1d06a55b98c1-91d5c284f522-JavaScript-PY-241.15989.155" />
+        <option value="bundled-python-sdk-babbdf50b680-7c6932dee5e4-com.jetbrains.pycharm.pro.sharedIndexes.bundled-PY-241.15989.155" />
+      </set>
+    </attachedChunks>
+  </component>
+  <component name="SpellCheckerSettings" RuntimeDictionaries="0" Folders="0" CustomDictionaries="0" DefaultDictionary="application-level" UseSingleDictionary="true" transferred="true" />
+  <component name="TaskManager">
+    <task active="true" id="Default" summary="Default task">
+      <changelist id="8fcbefe7-27f2-4c20-963b-4d1076493deb" name="Changes" comment="" />
+      <created>1777465961141</created>
+      <option name="number" value="Default" />
+      <option name="presentableId" value="Default" />
+      <updated>1777465961141</updated>
+      <workItem from="1777465962358" duration="7563000" />
+      <workItem from="1777537933572" duration="1620000" />
+      <workItem from="1777539672536" duration="928000" />
+      <workItem from="1777540602671" duration="7571000" />
+      <workItem from="1777818115019" duration="10750000" />
+      <workItem from="1778931435011" duration="23179000" />
+      <workItem from="1780406271806" duration="6750000" />
+      <workItem from="1780743130794" duration="16726000" />
+      <workItem from="1781160192420" duration="8967000" />
+      <workItem from="1781278822863" duration="736000" />
+      <workItem from="1781279572326" duration="6337000" />
+      <workItem from="1781324449839" duration="2045000" />
+      <workItem from="1781328160105" duration="7778000" />
+      <workItem from="1781538018717" duration="11356000" />
+      <workItem from="1781688993881" duration="557000" />
+      <workItem from="1781690386677" duration="16421000" />
+      <workItem from="1782654303107" duration="3159000" />
+      <workItem from="1784473753869" duration="7741000" />
+      <workItem from="1786123082143" duration="1844000" />
+    </task>
+    <task id="LOCAL-00001" summary="backend initiation">
+      <option name="closed" value="true" />
+      <created>1777473834159</created>
+      <option name="number" value="00001" />
+      <option name="presentableId" value="LOCAL-00001" />
+      <option name="project" value="LOCAL" />
+      <updated>1777473834159</updated>
+    </task>
+    <task id="LOCAL-00002" summary="backend initiation">
+      <option name="closed" value="true" />
+      <created>1777538867985</created>
+      <option name="number" value="00002" />
+      <option name="presentableId" value="LOCAL-00002" />
+      <option name="project" value="LOCAL" />
+      <updated>1777538867985</updated>
+    </task>
+    <task id="LOCAL-00003" summary="backend initiation #4">
+      <option name="closed" value="true" />
+      <created>1777946983490</created>
+      <option name="number" value="00003" />
+      <option name="presentableId" value="LOCAL-00003" />
+      <option name="project" value="LOCAL" />
+      <updated>1777946983490</updated>
+    </task>
+    <task id="LOCAL-00004" summary="lg-102 sentinel SAR image selection and add filters">
+      <option name="closed" value="true" />
+      <created>1779248554268</created>
+      <option name="number" value="00004" />
+      <option name="presentableId" value="LOCAL-00004" />
+      <option name="project" value="LOCAL" />
+      <updated>1779248554268</updated>
+    </task>
+    <task id="LOCAL-00005" summary="lg-103 sentinel-2 image pipeline and cloud cover selection.">
+      <option name="closed" value="true" />
+      <created>1779375627831</created>
+      <option name="number" value="00005" />
+      <option name="presentableId" value="LOCAL-00005" />
+      <option name="project" value="LOCAL" />
+      <updated>1779375627831</updated>
+    </task>
+    <task id="LOCAL-00006" summary="lg-104 adding the filters for the sentinel-1 images and caclulate decible values of the image pixels.">
+      <option name="closed" value="true" />
+      <created>1779976184544</created>
+      <option name="number" value="00006" />
+      <option name="presentableId" value="LOCAL-00006" />
+      <option name="project" value="LOCAL" />
+      <updated>1779976184544</updated>
+    </task>
+    <task id="LOCAL-00007" summary="lg-105 Implement pre/post change detection ratio on Sentinel-1">
+      <option name="closed" value="true" />
+      <created>1780312966245</created>
+      <option name="number" value="00007" />
+      <option name="presentableId" value="LOCAL-00007" />
+      <option name="project" value="LOCAL" />
+      <updated>1780312966245</updated>
+    </task>
+    <task id="LOCAL-00008" summary="lg-105 Implement pre/post change detection ratio on Sentinel-1">
+      <option name="closed" value="true" />
+      <created>1780313410962</created>
+      <option name="number" value="00008" />
+      <option name="presentableId" value="LOCAL-00008" />
+      <option name="project" value="LOCAL" />
+      <updated>1780313410962</updated>
+    </task>
+    <task id="LOCAL-00009" summary="lg-107 Implement NDWI computation on Sentinel-2">
+      <option name="closed" value="true" />
+      <created>1780318155342</created>
+      <option name="number" value="00009" />
+      <option name="presentableId" value="LOCAL-00009" />
+      <option name="project" value="LOCAL" />
+      <updated>1780318155342</updated>
+    </task>
+    <task id="LOCAL-00010" summary="lg-107/ lg-108 Implement NDWI computation on Sentinel-2 and random forest algorithm.">
+      <option name="closed" value="true" />
+      <created>1780576354420</created>
+      <option name="number" value="00010" />
+      <option name="presentableId" value="LOCAL-00010" />
+      <option name="project" value="LOCAL" />
+      <updated>1780576354420</updated>
+    </task>
+    <task id="LOCAL-00011" summary="lg-109 trainining mechanism of the ml model">
+      <option name="closed" value="true" />
+      <created>1780749716361</created>
+      <option name="number" value="00011" />
+      <option name="presentableId" value="LOCAL-00011" />
+      <option name="project" value="LOCAL" />
+      <updated>1780749716361</updated>
+    </task>
+    <task id="LOCAL-00012" summary="lg-110 implement weighted logic to get the final decision.">
+      <option name="closed" value="true" />
+      <created>1780752752611</created>
+      <option name="number" value="00012" />
+      <option name="presentableId" value="LOCAL-00012" />
+      <option name="project" value="LOCAL" />
+      <updated>1780752752611</updated>
+    </task>
+    <task id="LOCAL-00013" summary="lg-110 bug fix for ml model exporting geometric coordinates.">
+      <option name="closed" value="true" />
+      <created>1780754039862</created>
+      <option name="number" value="00013" />
+      <option name="presentableId" value="LOCAL-00013" />
+      <option name="project" value="LOCAL" />
+      <updated>1780754039862</updated>
+    </task>
+    <task id="LOCAL-00014" summary="lg-113 vectorisation and area calculation of results.">
+      <option name="closed" value="true" />
+      <created>1780806420915</created>
+      <option name="number" value="00014" />
+      <option name="presentableId" value="LOCAL-00014" />
+      <option name="project" value="LOCAL" />
+      <updated>1780806420915</updated>
+    </task>
+    <task id="LOCAL-00015" summary="integration of flood data, store in database and combine those with frontend.">
+      <option name="closed" value="true" />
+      <created>1781337970204</created>
+      <option name="number" value="00015" />
+      <option name="presentableId" value="LOCAL-00015" />
+      <option name="project" value="LOCAL" />
+      <updated>1781337970204</updated>
+    </task>
+    <task id="LOCAL-00016" summary="integration of flood data, store in database and combine those with frontend.">
+      <option name="closed" value="true" />
+      <created>1781338867351</created>
+      <option name="number" value="00016" />
+      <option name="presentableId" value="LOCAL-00016" />
+      <option name="project" value="LOCAL" />
+      <updated>1781338867351</updated>
+    </task>
+    <task id="LOCAL-00017" summary="historical analysis error fix.">
+      <option name="closed" value="true" />
+      <created>1782048039151</created>
+      <option name="number" value="00017" />
+      <option name="presentableId" value="LOCAL-00017" />
+      <option name="project" value="LOCAL" />
+      <updated>1782048039151</updated>
+    </task>
+    <option name="localTasksCounter" value="18" />
+    <servers />
+  </component>
+  <component name="TypeScriptGeneratedFilesManager">
+    <option name="version" value="3" />
+  </component>
+  <component name="VcsManagerConfiguration">
+    <MESSAGE value="backend initiation" />
+    <MESSAGE value="backend initiation #4" />
+    <MESSAGE value="lg-102 sentinel SAR image selection and add filters" />
+    <MESSAGE value="lg-103 sentinel-2 image pipeline and cloud cover selection." />
+    <MESSAGE value="lg-104 adding the filters for the sentinel-1 images and caclulate decible values of the image pixels." />
+    <MESSAGE value="lg-105 Implement pre/post change detection ratio on Sentinel-1" />
+    <MESSAGE value="lg-107 Implement NDWI computation on Sentinel-2" />
+    <MESSAGE value="lg-107/ lg-108 Implement NDWI computation on Sentinel-2 and random forest algorithm." />
+    <MESSAGE value="lg-109 trainining mechanism of the ml model" />
+    <MESSAGE value="lg-110 implement weighted logic to get the final decision." />
+    <MESSAGE value="lg-110 bug fix for ml model exporting geometric coordinates." />
+    <MESSAGE value="lg-113 vectorisation and area calculation of results." />
+    <MESSAGE value="integration of flood data, store in database and combine those with frontend." />
+    <MESSAGE value="historical analysis error fix." />
+    <option name="LAST_COMMIT_MESSAGE" value="historical analysis error fix." />
+  </component>
+  <component name="com.intellij.coverage.CoverageDataManagerImpl">
+    <SUITE FILE_PATH="coverage/lankageo_backend$test.coverage" NAME="test Coverage Results" MODIFIED="1781714535955" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/backend" />
+  </component>
+  <component name="github-copilot-workspace">
+    <instructionFileLocations>
+      <option value=".github/instructions" />
+    </instructionFileLocations>
+    <promptFileLocations>
+      <option value=".github/prompts" />
+    </promptFileLocations>
+  </component>
+</project>

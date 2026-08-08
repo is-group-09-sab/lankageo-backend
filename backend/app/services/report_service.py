@@ -20,21 +20,22 @@ class ReportService:
 
     async def get_report_data(self, request_id: str) -> Optional[Dict[str, Any]]:
         try:
-            # Fetch Live_Flood_Result
-            response = self.supabase.table("Live_Flood_Result") \
+            # Fetch live_flood_results by request_id
+            response = self.supabase.table("live_flood_results") \
                 .select("*") \
-                .eq("id", request_id) \
+                .eq("request_id", request_id) \
                 .execute()
 
             if not response.data:
                 return None
 
             result = response.data[0]
+            result_id = result.get("result_id")
 
-            # Fetch all associated Flood_Polygon records
-            polygon_response = self.supabase.table("Flood_Polygon") \
-                .select("id, severity") \
-                .eq("result_id", request_id) \
+            # Fetch all associated flood_polygons records using the result_id from the live_flood_results row
+            polygon_response = self.supabase.table("flood_polygons") \
+                .select("*") \
+                .eq("result_id", result_id) \
                 .execute()
             
             polygons = polygon_response.data if polygon_response.data else []
@@ -42,14 +43,39 @@ class ReportService:
             
             # Calculate severity breakdown
             severity_counts = {"High": 0, "Moderate": 0, "Low": 0}
+            features = []
+            
+            # Map database severity string to frontend severity levels
+            severity_mapping = {"critical": 3, "moderate": 2, "seasonal": 1}
+
             for p in polygons:
-                sev = p.get("severity", "Moderate")
-                if sev in severity_counts:
-                    severity_counts[sev] += 1
+                sev = p.get("severity", "moderate")
+                # Map to standard High/Moderate/Low for report summary
+                if sev == "critical":
+                    severity_counts["High"] += 1
+                elif sev == "seasonal":
+                    severity_counts["Low"] += 1
                 else:
                     severity_counts["Moderate"] += 1
-            
+                
+                # Build GeoJSON feature
+                features.append({
+                    "type": "Feature",
+                    "geometry": p.get("geom"),
+                    "properties": {
+                        "severity_level": severity_mapping.get(sev, 2),
+                        "area_km2": p.get("area_km2", 0.0),
+                        "confidence_score": p.get("confidence_score", 0.0),
+                        "water_type": p.get("water_type"),
+                        "result_id": result_id
+                    }
+                })
+
             result["severity_breakdown"] = severity_counts
+            result["geojson"] = {
+                "type": "FeatureCollection",
+                "features": features
+            }
             
             return result
         except Exception as e:

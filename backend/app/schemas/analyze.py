@@ -4,7 +4,7 @@ from typing import List, Dict, Any, Optional
 class TrendAnalysisRequest(BaseModel):
     lat: float = Field(..., description="Latitude of the center point")
     lng: float = Field(..., description="Longitude of the center point")
-    radius_km: float = Field(..., description="Analysis radius in kilometers")
+    radius_km: float = Field(default=10.0, description="Analysis radius in kilometers")
     years: int = Field(default=5, ge=1, le=20, description="Number of years for historical analysis")
 
 class YearData(BaseModel):
