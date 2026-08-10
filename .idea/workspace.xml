@@ -5,12 +5,8 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="8fcbefe7-27f2-4c20-963b-4d1076493deb" name="Changes" comment="historical analysis error fix.">
-      <change beforePath="$PROJECT_DIR$/backend/.env.example" beforeDir="false" afterPath="$PROJECT_DIR$/backend/.env.example" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/app/api/endpoints/analyze.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/app/api/endpoints/analyze.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/app/schemas/analyze.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/app/schemas/analyze.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/app/services/auth_service.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/app/services/auth_service.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/backend/app/services/gee_service.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/app/services/gee_service.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/app/services/report_service.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/app/services/report_service.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -99,7 +95,7 @@
       <workItem from="1781690386677" duration="16421000" />
       <workItem from="1782654303107" duration="3159000" />
       <workItem from="1784473753869" duration="7741000" />
-      <workItem from="1786123082143" duration="1844000" />
+      <workItem from="1786123082143" duration="8237000" />
     </task>
     <task id="LOCAL-00001" summary="backend initiation">
       <option name="closed" value="true" />

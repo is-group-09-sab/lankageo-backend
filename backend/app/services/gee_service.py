@@ -736,14 +736,14 @@ class GEEService:
         self, lat: float, lng: float, radius_km: float, years: int = None
     ) -> TrendAnalysisResponse:
         """
-        [LONGITUDINAL PROTOCOL] 5-Year Daily Residency Average.
-        Calculates how many days a pixel was water vs observed, averaged over 5 years.
-        Provides a high-fidelity longitudinal risk assessment.
+        [REVISED SAR PROTOCOL] Annual SAR Change-Detection Loop.
+        Uses Jan-Mar dry-season median baseline per year, applies SAR change detection ratio 
+        across monsoon windows, and suppresses permanent water via JRC occurrence masking.
         """
         if not self._initialized:
             self.initialize()
         
-        logger.info(f"Running Longitudinal Historical Analysis for {lat}, {lng} ({radius_km}km)")
+        logger.info(f"Running Revised SAR Historical Analysis for {lat}, {lng} ({radius_km}km)")
 
         # 1. Setup ROI and Timeframe
         roi = ee.Geometry.Point([lng, lat]).buffer(radius_km * 1000).bounds()
@@ -751,61 +751,81 @@ class GEEService:
         num_years = years or settings.GEE_HISTORICAL_YEARS
         start_year = current_year - num_years
 
-        # 2. Iterate through each year to calculate Annual Residency
+        # 2. Get JRC Permanent Surface Water Mask (>80% occurrence = permanent)
+        jrc = ee.Image('JRC/GSW1_4/GlobalSurfaceWater').clip(roi)
+        permanent_water_mask = jrc.select('occurrence').gt(80)
+
         yearly_residency_images = []
         years_data = []
 
         for y in range(start_year, current_year):
-            # Query full Sentinel-1 collection for the year
-            s1_year = ee.ImageCollection('COPERNICUS/S1_GRD')\
-                .filterBounds(roi)\
-                .filterDate(f'{y}-01-01', f'{y}-12-31')\
-                .filter(ee.Filter.eq('instrumentMode', 'IW'))\
-                .select('VV')
+            # A. Dry-season median SAR baseline for year y (Jan 1 - Mar 31)
+            s1_dry = (ee.ImageCollection('COPERNICUS/S1_GRD')
+                .filterBounds(roi)
+                .filterDate(f'{y}-01-01', f'{y}-03-31')
+                .filter(ee.Filter.eq('instrumentMode', 'IW'))
+                .select('VV'))
             
-            # Count observations
-            total_observations = s1_year.count().clip(roi)
+            dry_count = s1_dry.size().getInfo()
+            if dry_count > 0:
+                pre_baseline = s1_dry.median().clip(roi)
+            else:
+                # Fallback to previous year dry season or all-year baseline if missing
+                pre_baseline = ee.ImageCollection('COPERNICUS/S1_GRD')\
+                    .filterBounds(roi)\
+                    .filterDate(f'{y-1}-01-01', f'{y}-03-31')\
+                    .filter(ee.Filter.eq('instrumentMode', 'IW'))\
+                    .select('VV').median().clip(roi)
+
+            # B. Monsoon / Rainy Season Sentinel-1 SAR Collection (May 1 - Dec 31)
+            s1_monsoon = (ee.ImageCollection('COPERNICUS/S1_GRD')
+                .filterBounds(roi)
+                .filterDate(f'{y}-05-01', f'{y}-12-31')
+                .filter(ee.Filter.eq('instrumentMode', 'IW'))
+                .select('VV'))
+
+            total_obs = s1_monsoon.count().clip(roi)
             
-            # Count water detections (Using a robust -16dB threshold for high-frequency SAR)
-            def compute_daily_water(img):
-                return img.clip(roi).lt(-16).rename('water_mask')
-            
-            water_count = s1_year.map(compute_daily_water).sum()
-            
-            # residency = (Days detected as water) / (Total days observed)
-            # We use 0.001 to avoid division by zero
-            residency = water_count.divide(total_observations.add(0.001)).rename('residency')
+            # Pre-event VV linear scale with speckle filter
+            pre_vv_linear = ee.Image(10.0).pow(pre_baseline.divide(10.0)).focal_mean(7, 'circle', 'pixels')
+
+            # C. Detect SAR Change Ratio for each monsoon image
+            def detect_sar_flood(img):
+                post_vv_linear = ee.Image(10.0).pow(img.divide(10.0)).focal_mean(7, 'circle', 'pixels')
+                ratio = pre_vv_linear.divide(post_vv_linear)
+                # SAR ratio > 1.25 & Exclude permanent water
+                is_flood = ratio.gt(1.25).And(permanent_water_mask.Not()).rename('flood_mask')
+                return is_flood
+
+            residency = s1_monsoon.map(detect_sar_flood).mean().clip(roi).rename('residency')
             yearly_residency_images.append(residency)
-            
-            # Calculate average probability for this year for the trend chart
-            # We reduceRegion to get the mean residency across the ROI
+
+            # Calculate mean annual flood probability across ROI
             annual_stats = residency.reduceRegion(
                 reducer=ee.Reducer.mean(),
                 geometry=roi,
-                scale=200, # Fast, memory-efficient reduction for trend data
+                scale=200,
                 tileScale=4,
                 maxPixels=1e9
             ).getInfo()
-            
+
             annual_prob = (annual_stats.get('residency', 0) or 0) * 100
             years_data.append(YearData(year=y, value=round(annual_prob, 2)))
 
         # 3. 5-Year Mean Longitudinal Probability Index
-        # This is the "average residency" across the entire 5-year period
         longitudinal_index = ee.ImageCollection(yearly_residency_images).mean().rename('flood_probability')
         
-        # 4. Generate Visualization and Stats
-        # Scale 0 to 0.5 (representing 0% to 50% residency as the max probability)
+        # 4. Generate Tile Overlay URL
         viz_params = {
             'min': 0,
-            'max': 0.5,
-            'palette': ['ffffff', '3498db', 'e74c3c'] # White (None) to Blue to Red
+            'max': 0.15, # Scale 0 to 15% probability for high visual clarity
+            'palette': ['ffffff', '3498db', 'e74c3c']
         }
         
         map_id = longitudinal_index.getMapId(viz_params)
         composite_tile_url = map_id['tile_fetcher'].url_format
 
-        # Calculate global aggregate metrics
+        # Calculate 5-year average flood probability
         global_stats = longitudinal_index.reduceRegion(
             reducer=ee.Reducer.mean(),
             geometry=roi,
@@ -818,12 +838,11 @@ class GEEService:
         peak_year_data = max(years_data, key=lambda x: x.value)
         min_year_data = min(years_data, key=lambda x: x.value)
 
-        # 5. Zone Severity Breakdown (Based on FFI thresholds)
-        # Low: < 5% residency, Moderate: 5-20%, High: > 20%
+        # 5. Severity Breakdown
         classified = ee.Image(0)\
-            .where(longitudinal_index.gt(0).And(longitudinal_index.lte(0.05)), 1)\
-            .where(longitudinal_index.gt(0.05).And(longitudinal_index.lte(0.20)), 2)\
-            .where(longitudinal_index.gt(0.20), 3)
+            .where(longitudinal_index.gt(0).And(longitudinal_index.lte(0.03)), 1)\
+            .where(longitudinal_index.gt(0.03).And(longitudinal_index.lte(0.10)), 2)\
+            .where(longitudinal_index.gt(0.10), 3)
             
         counts = classified.reduceRegion(
             reducer=ee.Reducer.frequencyHistogram(),
