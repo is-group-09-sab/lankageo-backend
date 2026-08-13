@@ -41,6 +41,11 @@ class Settings(BaseSettings):
     GOOGLE_PLACES_API_KEY: Optional[str] = None
     GOOGLE_MAPS_STATIC_API_KEY: Optional[str] = None
     
+    # Vonage SMS Settings
+    VONAGE_API_KEY: Optional[str] = None
+    VONAGE_API_SECRET: Optional[str] = None
+    VONAGE_BRAND_NAME: Optional[str] = "LankaGeo"
+    
     model_config = SettingsConfigDict(env_file=".env", case_sensitive=True)
 
 settings = Settings()

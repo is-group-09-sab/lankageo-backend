@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.api.endpoints import auth, analyze, case_studies, gee, config, reports, gauges
+from app.api.endpoints import auth, analyze, case_studies, gee, config, reports, gauges, alerts
 
 api_router = APIRouter()
 api_router.include_router(auth.router, prefix="/auth", tags=["auth"])
@@ -9,3 +9,4 @@ api_router.include_router(gee.router, prefix="/gee", tags=["gee"])
 api_router.include_router(config.router, prefix="/config", tags=["config"])
 api_router.include_router(reports.router, prefix="/reports", tags=["reports"])
 api_router.include_router(gauges.router, prefix="/gauges", tags=["gauges"])
+api_router.include_router(alerts.router, prefix="/alerts", tags=["alerts"])

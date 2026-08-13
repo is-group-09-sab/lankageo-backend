@@ -197,6 +197,15 @@ class FloodService:
         except Exception as e:
             print(f"Persistence error: {e}")
 
+        # 4. Trigger Alerts if Flood Detected
+        try:
+            affected_area = analysis_data.get("affected_area_km2", 0)
+            if affected_area > 0:
+                from app.services.alert_service import alert_service
+                alert_service.trigger_alerts(request.lat, request.lng, affected_area)
+        except Exception as e:
+            print(f"Error triggering alerts: {e}")
+
         return {
             **analysis_data,
             "analysis_timestamp": datetime.now().isoformat(),
