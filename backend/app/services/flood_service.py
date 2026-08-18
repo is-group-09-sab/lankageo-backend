@@ -123,9 +123,15 @@ class FloodService:
         # if cached:
         #     return cached
 
-        # 2. Run GEE Analysis
-        analysis_data = gee_service.run_live_analysis(
-            request.lat, request.lng, request.radius_km, request.override_date
+        import asyncio
+        loop = asyncio.get_running_loop()
+        
+        # 2. Run GEE Analysis (in a thread to prevent event loop blocking)
+        analysis_data = await loop.run_in_executor(
+            None,
+            lambda: gee_service.run_live_analysis(
+                request.lat, request.lng, request.radius_km, request.override_date
+            )
         )
 
         # 3. Prepare Persistence Data
@@ -202,7 +208,10 @@ class FloodService:
             affected_area = analysis_data.get("affected_area_km2", 0)
             if affected_area > 0:
                 from app.services.alert_service import alert_service
-                alert_service.trigger_alerts(request.lat, request.lng, affected_area)
+                await loop.run_in_executor(
+                    None,
+                    lambda: alert_service.trigger_alerts(request.lat, request.lng, affected_area)
+                )
         except Exception as e:
             print(f"Error triggering alerts: {e}")
 

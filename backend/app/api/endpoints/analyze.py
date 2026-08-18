@@ -55,10 +55,10 @@ async def analyze_live_flood(
     Orchestrates GEE processing, caching, and persistence.
     """
     try:
-        # Implement 75-second timeout for GEE processing
+        # Increased timeout to 180 seconds for GEE processing
         return await asyncio.wait_for(
             flood_service.process_flood_analysis(request),
-            timeout=75.0
+            timeout=180.0
         )
     except asyncio.TimeoutError:
         raise HTTPException(
@@ -88,8 +88,8 @@ async def analyze_trend(
     
     try:
         # 1. Execute Historical Analysis via GEE Service
-        # Enforcing 30-second timeout via asyncio.wait_for to ensure the endpoint 
-        # returns within reasonable time limit for the frontend.
+        # Enforcing 180-second timeout via asyncio.wait_for to ensure the endpoint 
+        # has enough time to complete 5 years of GEE analysis.
         analysis_result = await asyncio.wait_for(
             gee_service.run_historical_analysis(
                 lat=request_data.lat,
@@ -97,7 +97,7 @@ async def analyze_trend(
                 radius_km=request_data.radius_km,
                 years=request_data.years
             ),
-            timeout=30.0
+            timeout=180.0
         )
         
         # 2. Persist to Database (Supabase) if DB client is available
