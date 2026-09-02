@@ -237,23 +237,7 @@ GEE_PROJECT_ID=your_google_cloud_project_id
 
 # Resend
 RESEND_API_KEY=your_resend_api_key
-```
-
-### ⚠️ Important
-
-Never commit the `.env` file to GitHub.
-
-Make sure `.gitignore` contains:
-
-```gitignore
-.env
-.env.local
-venv/
-__pycache__/
-*.pyc
-```
-
-Use `.env.example` to provide the names of required environment variables without exposing actual credentials.
+`'
 
 ---
 
